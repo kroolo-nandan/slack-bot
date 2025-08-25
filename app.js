@@ -433,11 +433,20 @@ app.event('app_mention', async ({ event, client, logger }) => {
     if (result.type === 'control' && result.action === 'summarizeThread') {
       try {
         const channelId = event.channel;
+        // Enforce: only allow inside an existing thread
+        if (!event.thread_ts) {
+          await client.chat.postEphemeral(withThread({ channel: channelId, user: event.user, text: 'Summarize Thread works only inside an existing thread. Please open a thread and try again, or use the message shortcut from a thread.' }));
+          return;
+        }
         const rootTs = threadTs;
         const withThread2 = (payload) => (rootTs ? { ...payload, thread_ts: rootTs } : payload);
 
-        // Ensure scope and membership
-        try { await client.conversations.join({ channel: channelId }); } catch (_) {}
+        // Ensure scope and membership (only attempts for public channels starting with 'C')
+        try {
+          if (channelId && channelId.startsWith('C')) {
+            await client.conversations.join({ channel: channelId });
+          }
+        } catch (_) {}
 
         const replies = await client.conversations.replies({ channel: channelId, ts: rootTs, limit: 100 });
         const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
@@ -480,7 +489,10 @@ app.event('app_mention', async ({ event, client, logger }) => {
         }));
       } catch (e) {
         logger.error('Error summarizing thread via intent:', e);
-        await client.chat.postEphemeral(withThread({ channel: event.channel, user: event.user, text: `❌ Failed to summarize thread: ${e.message}` }));
+        // Provide specific guidance for missing scopes
+        const missing = e?.data?.error === 'missing_scope';
+        const scopeMsg = missing ? 'Missing required Slack scopes. Please add: channels:history, groups:history, im:history, mpim:history, channels:read, groups:read, im:read, mpim:read, chat:write, channels:join (public channels only), and re-install the app.' : '';
+        await client.chat.postEphemeral(withThread({ channel: event.channel, user: event.user, text: `❌ Failed to summarize thread: ${e.message}${scopeMsg ? '\n' + scopeMsg : ''}` }));
       }
       return;
     }
