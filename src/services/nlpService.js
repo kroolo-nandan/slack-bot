@@ -1,3 +1,17 @@
+    // Summarize thread fallback
+    if (/\b(summarize|summary|tl;dr|tldr)\b/.test(queryLower) && queryLower.includes('thread')) {
+      return {
+        intent: 'summarize_threads',
+        domain: null,
+        parameters: {},
+        action: 'summarizeThread',
+        confidence: 0.85,
+        reasoning: 'Fallback pattern matching',
+        type: 'actionable',
+        provider: 'fallback'
+      };
+    }
+
 // Enhanced AI-Powered Natural Language Processing Service - Unified Intent Engine
 
 const OpenAI = require('openai');
@@ -17,6 +31,7 @@ class NlpService {
       suggested_documents: 'getSuggestedDocuments',
       trending_documents: 'getTrendingDocuments',
       dynamic_suggestions: 'getDynamicSuggestions',
+      summarize_threads: 'summarizeThread',
       change_company: 'initiateCompanyChange',
       general: 'generalResponse'
     };
@@ -53,6 +68,7 @@ AVAILABLE INTENTS:
 - suggested_documents: User wants recommendations (e.g., "suggest documents", "recommended files")
 - trending_documents: User wants popular content (e.g., "trending documents", "what's popular")
 - dynamic_suggestions: User wants autocomplete (e.g., "suggest completions for 'project'")
+- summarize_threads: User wants a summary of the current Slack thread (e.g., "summarize this thread", "tl;dr the thread")
 - change_company: User wants to change the active company context (e.g., "change company", "switch company", "set company to X")
 - general: Casual conversation, greetings, or unrelated queries
 
@@ -74,6 +90,7 @@ ACTION MAPPING:
 - suggested_documents → getSuggestedDocuments
 - trending_documents → getTrendingDocuments
 - dynamic_suggestions → getDynamicSuggestions
+- summarize_threads → summarizeThread
 - change_company → initiateCompanyChange
 - general → generalResponse
 
@@ -81,6 +98,7 @@ PARAMETER EXTRACTION RULES:
 - For search: extract "query", "apps" (array), "limit" (number)
 - For analytics endpoints: extract none (company_id and user_email will be provided from context)
 - For suggestions: extract "partial_query", "limit"
+- For summarize_threads: extract none; downstream will use Slack thread context
 - For general: extract "message" (your response)
 
 EXAMPLES:
@@ -88,6 +106,7 @@ EXAMPLES:
 "hello" → {"intent": "general", "domain": null, "parameters": {"message": "Hello! I can help you search documents. What would you like to do?"}, "action": "generalResponse", "confidence": 1.0}
 "show search analytics" → {"intent": "search_analytics", "domain": null, "parameters": {}, "action": "getSearchAnalytics", "confidence": 0.9}
 "what are trending searches" → {"intent": "trending_searches", "domain": null, "parameters": {}, "action": "getTrendingSearches", "confidence": 0.9}
+"summarize this thread" → {"intent": "summarize_threads", "domain": null, "parameters": {}, "action": "summarizeThread", "confidence": 0.9}
 "change company" → {"intent": "change_company", "domain": null, "parameters": {}, "action": "initiateCompanyChange", "confidence": 0.9}
 CRITICAL: Return ONLY the JSON object. No explanatory text, no code fences, no markdown formatting.`;
   }
@@ -215,7 +234,7 @@ CRITICAL: Return ONLY the JSON object. No explanatory text, no code fences, no m
 USER QUERY: "${query}"
 
 INSTRUCTIONS:
-1. Determine the primary intent among: search, search_analytics, trending_searches, recent_searches, suggested_documents, trending_documents, dynamic_suggestions, change_company, general
+1. Determine the primary intent among: search, search_analytics, trending_searches, recent_searches, suggested_documents, trending_documents, dynamic_suggestions, summarize_threads, change_company, general
 2. Extract relevant parameters based on the intent
 3. Assign the correct action method name based on the mapping provided
 4. Provide confidence score (0.0-1.0)

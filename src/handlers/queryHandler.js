@@ -216,6 +216,17 @@ class QueryHandler {
           return this.formatLegacyApiResponse(dynamicResponse, 'dynamic-suggestions', nlpResult.parameters, dynamicDuration, nlpResult);
 
 
+        case 'summarizeThread':
+          console.log('📝 Executing: Summarize Thread (control instruction)');
+          // Do not call OpenAI here; Slack thread context is only available at app layer.
+          return {
+            intent: 'summarize_threads',
+            action: 'summarizeThread',
+            type: 'control',
+            parameters: nlpResult.parameters || {},
+            confidence: nlpResult.confidence
+          };
+
         default:
           console.log('❌ Unknown action:', nlpResult.action);
           return {

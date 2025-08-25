@@ -51,6 +51,9 @@ if (useSocketMode) {
       handler: (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
 
+// Register message shortcuts once (avoid multiple ack due to double registration)
+if (!global.__KROOLO_SHORTCUTS__) {
+
 // Message Shortcut: Summarize the selected thread
 app.shortcut('summarize_thread_shortcut', async ({ ack, body, client, logger }) => {
   try {
@@ -178,6 +181,9 @@ app.view('search_from_thread_submit', async ({ ack, body, view, client, logger }
     logger.error('Error in search_from_thread_submit:', error);
   }
 });
+
+global.__KROOLO_SHORTCUTS__ = true;
+}
         res.end('Kroolo Enterprise Search Slack Bot is running!');
       }
     },
@@ -428,6 +434,62 @@ app.event('app_mention', async ({ event, client, logger }) => {
           ]}
         ]
       }));
+      return;
+    }
+
+    // Handle summarize thread intent as a control action (use Slack thread context)
+    if (result.type === 'control' && result.action === 'summarizeThread') {
+      try {
+        const channelId = event.channel;
+        const rootTs = threadTs;
+        const withThread2 = (payload) => (rootTs ? { ...payload, thread_ts: rootTs } : payload);
+
+        // Ensure scope and membership
+        try { await client.conversations.join({ channel: channelId }); } catch (_) {}
+
+        const replies = await client.conversations.replies({ channel: channelId, ts: rootTs, limit: 100 });
+        const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
+        if (!messages.length) {
+          await client.chat.postEphemeral(withThread2({ channel: channelId, user: event.user, text: 'No messages found in this thread.' }));
+          return;
+        }
+
+        const transcript = messages.map(m => {
+          const ts = new Date(parseFloat(m.ts) * 1000).toISOString();
+          const author = m.user || m.username || m.bot_profile?.name || 'unknown';
+          const text = (m.text || '').replace(/\s+/g, ' ').trim();
+          return `[${ts}] ${author}: ${text}`;
+        }).join('\n');
+
+        if (!nlpService.openaiClient) {
+          await client.chat.postEphemeral(withThread2({ channel: channelId, user: event.user, text: 'Summarization is unavailable (LLM not configured).' }));
+          return;
+        }
+
+        const prompt = `Summarize the following Slack thread into a concise, factual summary with key points and decisions. If action items appear, list them. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
+        const completion = await nlpService.openaiClient.chat.completions.create({
+          model: nlpService.getPowerfulModel(),
+          messages: [
+            { role: 'system', content: 'You are an expert meeting and conversation summarizer.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.3,
+          max_tokens: 350
+        });
+        const summary = completion.choices?.[0]?.message?.content?.trim() || 'Summary not available.';
+
+        await client.chat.postMessage(withThread2({
+          channel: channelId,
+          text: '📝 Thread Summary',
+          blocks: [
+            { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
+            { type: 'section', text: { type: 'mrkdwn', text: summary } }
+          ]
+        }));
+      } catch (e) {
+        logger.error('Error summarizing thread via intent:', e);
+        await client.chat.postEphemeral(withThread({ channel: event.channel, user: event.user, text: `❌ Failed to summarize thread: ${e.message}` }));
+      }
       return;
     }
 
