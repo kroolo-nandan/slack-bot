@@ -467,9 +467,21 @@ app.event('app_mention', async ({ event, client, logger }) => {
           return;
         }
 
+        // Resolve Slack user IDs to human-readable display names
+        const userIds2 = [...new Set(messages.map(m => m.user).filter(Boolean))];
+        const nameMap2 = {};
+        for (const uid of userIds2) {
+          try {
+            const ui = await client.users.info({ user: uid });
+            nameMap2[uid] = ui?.user?.profile?.display_name || ui?.user?.profile?.real_name || ui?.user?.name || uid;
+          } catch (_) {
+            nameMap2[uid] = uid;
+          }
+        }
+
         const transcript = messages.map(m => {
           const ts = new Date(parseFloat(m.ts) * 1000).toISOString();
-          const author = m.user || m.username || m.bot_profile?.name || 'unknown';
+          const author = (m.user && nameMap2[m.user]) || m.username || m.bot_profile?.name || 'unknown';
           const text = (m.text || '').replace(/\s+/g, ' ').trim();
           return `[${ts}] ${author}: ${text}`;
         }).join('\n');
@@ -479,7 +491,7 @@ app.event('app_mention', async ({ event, client, logger }) => {
           return;
         }
 
-        const prompt = `Summarize the following Slack thread into a concise, factual summary with key points and decisions. If action items appear, list them. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
+        const prompt = `Summarize the following Slack thread into a concise, factual summary. Focus on: key points, decisions, outcomes, and clear action items (with owners if evident). Avoid quoting raw Slack user IDs; refer to participants by their display names. Ignore greetings and bot boilerplate. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
         const completion = await nlpService.openaiClient.chat.completions.create({
           model: nlpService.getPowerfulModel(),
           messages: [
