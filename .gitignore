@@ -1,0 +1,254 @@
+# ===== SENSITIVE CONFIGURATION FILES =====
+# NEVER commit these files - they contain API keys and secrets
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.staging
+*.env
+
+# ===== NODE.JS DEPENDENCIES =====
+# Dependencies installed by npm/yarn
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Package manager lock files (optional - some teams commit these)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ===== TEST FILES AND COVERAGE =====
+# Test files and temporary test scripts
+test-*.js
+*-test.js
+test_*.js
+*_test.js
+coverage/
+*.lcov
+.nyc_output
+.jest/
+
+# Specific test files for this project
+test-dynamic-auth.js
+test-pipedream-fix.js
+test-complete-pipedream.js
+test-oauth-fix.js
+test-final-oauth.js
+
+# ===== BUILD AND DISTRIBUTION =====
+# Build outputs and distribution files
+dist/
+build/
+out/
+.next/
+.nuxt/
+.vuepress/dist
+.serverless/
+
+# ===== LOGS AND TEMPORARY FILES =====
+# Log files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# ===== CACHE AND TEMPORARY DIRECTORIES =====
+# Cache directories
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Temporary folders
+tmp/
+temp/
+.tmp/
+.temp/
+
+# ===== EDITOR AND IDE FILES =====
+# VSCode
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ===== OPERATING SYSTEM FILES =====
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ===== RUNTIME AND PROCESS FILES =====
+# Node.js runtime
+.npm
+.eslintcache
+.node_repl_history
+*.tgz
+.yarn-integrity
+.pnp.*
+.pnp.js
+
+# Optional REPL history
+.node_repl_history
+
+# ===== DATABASE AND DATA FILES =====
+# Local database files
+*.sqlite
+*.sqlite3
+*.db
+*.db3
+
+# Data files
+data/
+*.csv
+*.json.backup
+*.bak
+
+# ===== SECURITY AND CERTIFICATES =====
+# SSL certificates and keys
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# SSH keys
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# ===== DEPLOYMENT AND CLOUD =====
+# Serverless Framework
+.serverless/
+serverless.yml.backup
+
+# Docker
+.dockerignore
+Dockerfile.backup
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# ===== PROJECT SPECIFIC =====
+# Slack bot specific files
+slack-bot-logs/
+bot-sessions/
+user-data/
+
+# API response cache
+api-cache/
+response-cache/
+
+# Pipedream specific
+pipedream-cache/
+oauth-sessions/
+
+# ===== DOCUMENTATION DRAFTS =====
+# Draft documentation and notes
+NOTES.md
+TODO.md
+DRAFT_*.md
+*.draft.md
+
+# ===== BACKUP FILES =====
+# Backup files
+*.backup
+*.bak
+*.old
+*.orig
+*~
+
+# ===== WHAT TO KEEP IN VERSION CONTROL =====
+# These files SHOULD be committed:
+# - README.md
+# - package.json
+# - src/ directory
+# - .gitignore (this file)
+# - LICENSE
+# - Documentation files
+
+# ===== EXAMPLE .env FILE =====
+# Create .env.example as a template (without real values)
+!.env.example
+
+
+.gw

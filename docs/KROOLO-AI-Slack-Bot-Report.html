@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KROOLO AI — Slack Bot Report</title>
+  <style>
+    :root { --fg:#0f172a; --muted:#475569; --brand:#0ea5e9; --bg:#ffffff; --accent:#22c55e; }
+    html, body { background: var(--bg); color: var(--fg); font-family: Inter, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.65; }
+    .container { max-width: 900px; margin: 40px auto; padding: 0 24px; }
+    h1 { font-size: 2.2rem; margin: 0 0 0.25rem 0; }
+    h2 { font-size: 1.5rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; margin-top: 2rem; }
+    h3 { font-size: 1.15rem; margin-top: 1.25rem; }
+    .meta { color: var(--muted); margin-bottom: 24px; }
+    .lead { background: #f1f5f9; border: 1px solid #e2e8f0; padding: 16px; border-radius: 10px; }
+    .callout { background: #ecfeff; border: 1px solid #cffafe; padding: 12px 14px; border-radius: 8px; }
+    ul { margin: 0.4rem 0 1rem 1.25rem; }
+    li { margin: 0.25rem 0; }
+    .footer { margin-top: 3rem; color: var(--muted); font-size: 0.9rem; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#f0f9ff; color:#0369a1; border:1px solid #bae6fd; font-size:12px; }
+    @media print { .container { margin: 0; } }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>KROOLO AI — Slack Bot Report</h1>
+    <div class="meta">Version 1.0 • 2025-08-14</div>
+    <p class="lead">KROOLO AI’s Slack Bot brings enterprise knowledge to where your teams already work. Employees can ask questions, find documents, and discover what’s trending without leaving Slack. The bot is secure, context-aware, and designed for fast adoption with minimal training.</p>
+
+    <h2>What the Bot Does</h2>
+    <ul>
+      <li><strong>Ask &amp; Find</strong>: Ask in natural language to discover relevant documents and answers.</li>
+      <li><strong>Suggested for You</strong>: Recommended documents based on your role and activity.</li>
+      <li><strong>What’s Trending</strong>: See what’s popular across your company right now.</li>
+      <li><strong>Quick Actions</strong>: Open, <em>Why this?</em>, <em>Search similar</em>, and <em>Show more</em>.</li>
+      <li><strong>Company Context</strong>: Results tailored to your selected company/workspace.</li>
+    </ul>
+
+    <h2>Who It’s For</h2>
+    <ul>
+      <li><strong>All employees</strong>: Search and discover content quickly.</li>
+      <li><strong>Managers and Leads</strong>: Track what’s trending and amplify key content.</li>
+      <li><strong>Admins</strong>: Manage connectors and data sources in the web console.</li>
+    </ul>
+
+    <h2>How It Works (At a Glance)</h2>
+    <ol>
+      <li>@mention the bot in a channel or DM.</li>
+      <li>The bot understands your request (search, suggest, trending, or help).</li>
+      <li>If needed, pick your company/workspace once.</li>
+      <li>Get rich, interactive results you can act on immediately.</li>
+    </ol>
+
+    <h2>User Journeys</h2>
+    <h3>Find a policy</h3>
+    <p>“@Bot show me the leave policy” → See top results → Open the document.</p>
+    <h3>Discover related content</h3>
+    <p>Use <em>Search similar</em> under a result to find more like it.</p>
+    <h3>Understand recommendations</h3>
+    <p>Click <em>Why this?</em> to see why a document was suggested or trending.</p>
+    <h3>Browse more</h3>
+    <p>Use <em>Show more</em> to explore additional results without re-asking.</p>
+
+    <h2>Key Benefits</h2>
+    <ul>
+      <li><strong>In-Slack Productivity</strong>: No context switching to another app.</li>
+      <li><strong>Faster Decisions</strong>: Get the right document in seconds.</li>
+      <li><strong>Explainability</strong>: <em>Why this?</em> builds trust in recommendations.</li>
+      <li><strong>Discoverability</strong>: Trending surfaces what matters to more people.</li>
+    </ul>
+
+    <h2>Security &amp; Privacy (High-Level)</h2>
+    <ul>
+      <li><strong>Company-Scoped</strong>: Results honor your company/workspace boundaries.</li>
+      <li><strong>User-Aware</strong>: Responses are tailored to the requesting user.</li>
+      <li><strong>No Public Leaks</strong>: The bot doesn’t share results across companies.</li>
+      <li><strong>Admin Controls</strong>: Manage sources and permissions in the web console.</li>
+    </ul>
+
+    <h2>Roles &amp; Responsibilities</h2>
+    <ul>
+      <li><strong>Employee</strong>: Ask, browse, and open documents inside Slack.</li>
+      <li><strong>Manager</strong>: Promote or share key documents highlighted by Trending.</li>
+      <li><strong>Admin</strong>: Configure sources and access in the Enterprise Search console.</li>
+    </ul>
+
+    <h2>Getting Started</h2>
+    <ol>
+      <li>Add the Slack Bot to your workspace and channel.</li>
+      <li>@mention the bot and ask a question (e.g., “latest Q3 roadmap?”).</li>
+      <li>If prompted, pick your company/workspace once.</li>
+      <li>Use buttons to explore: Open, Why this?, Search similar, Show more.</li>
+    </ol>
+
+    <h2>FAQ</h2>
+    <ul>
+      <li><strong>Do I need training?</strong> No. Ask in plain English.</li>
+      <li><strong>Can I use it in any channel?</strong> Yes, where the bot is added.</li>
+      <li><strong>Is it secure?</strong> Yes. Results are company-scoped and user-aware.</li>
+      <li><strong>Where do I manage connectors?</strong> In the Enterprise Search web console.</li>
+    </ul>
+
+    <h2>What’s Included</h2>
+    <ul>
+      <li>Search with rich results</li>
+      <li>Suggested for You</li>
+      <li>Trending with interactive actions</li>
+      <li>Company context selection and persistence</li>
+    </ul>
+
+    <h2>Trending Documents (What to Expect)</h2>
+    <ul>
+      <li>Shows popular content right now within your company/workspace.</li>
+      <li>Each item includes a title, short preview, and an easy <strong>Open</strong> button.</li>
+      <li>Actions under each item: <em>Why this?</em>, <em>Search similar</em>, and <em>Show more</em>.</li>
+    </ul>
+    <p class="callout"><strong>Notes:</strong> If a document has no preview, you still get the title and actions. Links appear only when a safe, valid URL is available.</p>
+
+    <h2>Overall Flow (Simple Walkthrough)</h2>
+    <ol>
+      <li>@mention the bot in a channel or DM and ask for search, suggestions, or trending.</li>
+      <li>If it’s your first time in that channel, the bot may ask you to pick your company/workspace once.</li>
+      <li>Receive clean, interactive results with buttons (Open, Why this?, Search similar, Show more).</li>
+      <li>Keep browsing within Slack; no need to switch apps.</li>
+    </ol>
+
+    <h2>Authentication &amp; Middleware (When It Applies)</h2>
+    <ul>
+      <li>The bot tailors results to your company and your Slack user.</li>
+      <li>It may ask you to confirm/select your company once per channel. Your choice is remembered.</li>
+    </ul>
+    <h3>Applied</h3>
+    <p>When you request <strong>search</strong>, <strong>suggested</strong>, or <strong>trending</strong> content, the bot uses your selected company and your Slack identity to fetch the right results.</p>
+    <h3>Skipped</h3>
+    <p>For general chit‑chat (e.g., greetings/help), the bot replies immediately without prompting for company selection.</p>
+    <p><em>What it means for you:</em> You get relevant results for your company, and you won’t see content from other companies/workspaces.</p>
+
+    <h2>Admin Actions in Slack (Connect, Disconnect, Ingest)</h2>
+    <p>If you try to perform administrative actions in Slack (e.g., connect a new tool, disconnect a source, ingest data), the bot guides you to the Enterprise Search web console.</p>
+    <ul>
+      <li><strong>Why</strong>: Admin actions are safer and clearer in the console with full controls and confirmations.</li>
+      <li><strong>How</strong>: Slack shows a button to open the correct console page and complete the task securely.</li>
+    </ul>
+    <h3>Examples</h3>
+    <ul>
+      <li>“Connect Google Drive” → Button opens the console’s connectors page.</li>
+      <li>“Disconnect Confluence” → Redirects you to the console with context.</li>
+      <li>“Ingest HR documents” → Points you to the ingestion flow in the console.</li>
+    </ul>
+
+    <h2>Roadmap (Highlights)</h2>
+    <ul>
+      <li>One-click <em>Search similar</em> action</li>
+      <li>Slash commands (e.g., /search)</li>
+      <li>Expanded analytics dashboards</li>
+    </ul>
+
+    <div class="footer">© KROOLO AI — All rights reserved</div>
+  </main>
+</body>
+</html>

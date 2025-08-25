@@ -1,0 +1,45 @@
+{
+  "name": "slack-api-query-bot",
+  "version": "1.0.0",
+  "description": "A Slack bot that processes natural language queries and calls APIs",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "start-managed": "node scripts/start-bot.js",
+    "start-production": "NODE_ENV=production USE_SOCKET_MODE=false node app.js",
+    "server": "node server.js",
+    "dev": "nodemon app.js",
+    "dev-socket": "USE_SOCKET_MODE=true nodemon app.js",
+    "dev-http": "USE_SOCKET_MODE=false nodemon app.js",
+    "dev-server": "nodemon server.js",
+    "test": "jest",
+    "test-auth": "node test/dynamic-auth-test.js",
+    "test-email": "node test/email-priority-test.js",
+    "test-accounts": "node test/real-account-ids-test.js",
+    "test-payload": "node test/api-payload-test.js",
+    "test-storage": "node test/real-connection-storage-test.js",
+    "demo-auth": "node scripts/test-dynamic-auth.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@pipedream/sdk": "^1.7.0",
+    "@slack/bolt": "^3.17.1",
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.21.2",
+    "mongoose": "^8.16.5",
+    "openai": "^5.10.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "slack",
+    "bot",
+    "api",
+    "natural-language"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

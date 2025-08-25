@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enterprise Search Slack Bot — Technical Guide</title>
+  <style>
+    :root { --fg:#111; --muted:#555; --brand:#0f766e; --bg:#fff; --accent:#f97316; }
+    html, body { background: var(--bg); color: var(--fg); font-family: Inter, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; }
+    .container { max-width: 900px; margin: 40px auto; padding: 0 24px; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { font-size: 2.2rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.5rem; border-bottom: 2px solid #eee; padding-bottom: 4px; margin-top: 2rem; }
+    h3 { font-size: 1.15rem; margin-top: 1.4rem; }
+    .meta { color: var(--muted); margin-bottom: 24px; }
+    .lead { background: #f8fafc; border: 1px solid #eef2f7; padding: 16px; border-radius: 10px; }
+    code, pre { background: #0b1220; color: #e2e8f0; border-radius: 6px; }
+    code { padding: 2px 6px; }
+    pre { padding: 14px; overflow-x: auto; }
+    .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #ecfeff; color: #0e7490; border: 1px solid #cffafe; }
+    .callout { background: #fffbeb; border: 1px solid #fef3c7; padding: 12px 14px; border-radius: 8px; }
+    ul { margin: 0.4rem 0 1rem 1.25rem; }
+    li { margin: 0.25rem 0; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .footer { margin-top: 3rem; color: var(--muted); font-size: 0.9rem; }
+    .kbd { background:#f3f4f6; border:1px solid #e5e7eb; border-bottom-width:2px; border-radius:6px; padding:2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; }
+    th { background: #f9fafb; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media print {
+      a { color: inherit; text-decoration: none; }
+      .badge { border: none; }
+      .container { margin: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>Enterprise Search Slack Bot — Technical Guide</h1>
+    <div class="meta">Version 1.0 • 2025-08-14</div>
+    <p class="lead">The Enterprise Search Slack Bot enables users to search, discover, and interact with enterprise content directly from Slack. It integrates with a FastAPI backend and renders rich, interactive Slack messages using Block Kit. This guide covers capabilities, end-to-end flow, intents, roles, authentication, middleware usage, endpoints, formatting, and troubleshooting.</p>
+
+    <h2>Capabilities</h2>
+    <ul>
+      <li><strong>Search documents</strong> via FastAPI (<code>POST /api/search</code>) and display rich results.</li>
+      <li><strong>Suggested documents</strong> personalized by user/company context (<code>POST /api/suggested-documents</code>).</li>
+      <li><strong>Trending documents</strong> with interactive actions (Why this?, Search similar) and pagination (<code>POST /api/trending-documents</code>).</li>
+      <li><strong>Company context selection</strong> per Slack user and channel using <code>SlackSessionModel</code>.</li>
+      <li><strong>Admin tool requests redirection</strong> to Enterprise Search console.</li>
+      <li><strong>General small talk</strong> without authentication.</li>
+    </ul>
+
+    <h2>Architecture & Flow</h2>
+    <ol>
+      <li><strong>Slack Event</strong>: Mentions or DMs handled in <code>app.js</code>.</li>
+      <li><strong>Pre-checks</strong>: Auto-join, quick NLP general intent, redirect admin-tool phrases.</li>
+      <li><strong>Authentication & Context</strong>: Email via <code>users.info</code>, <code>requireUserAuthentication</code>, company selection via <code>SlackSessionModel</code>.</li>
+      <li><strong>Intent Processing</strong>: <code>queryHandler.processQuery()</code> dispatches actions.</li>
+      <li><strong>API Calls</strong>: <code>apiService.callAPI()</code> whitelists params, adds RBAC fields.</li>
+      <li><strong>Formatting</strong>: <code>formatResponse()</code> maps to Block Kit via <code>formatter.js</code>.</li>
+    </ol>
+
+    <h2>Intents</h2>
+    <ul>
+      <li><strong>general</strong>: Greetings/help (no auth), conversational response.</li>
+      <li><strong>callSearchApi / search</strong>: <code>POST /api/search</code> with <code>{ query, limit?, company_id, user_email }</code>.</li>
+      <li><strong>getSuggestedDocuments</strong>: <code>POST /api/suggested-documents</code> with RBAC-only body.</li>
+      <li><strong>getTrendingDocuments</strong>: <code>POST /api/trending-documents</code> with RBAC-only body.</li>
+      <li><strong>analytics (optional)</strong>: Only if backend exposes endpoints; otherwise returns 404.</li>
+    </ul>
+
+    <h2>Roles & Permissions</h2>
+    <div class="two-col">
+      <div>
+        <h3>User</h3>
+        <ul>
+          <li>Run searches and view suggestions/trending within selected company.</li>
+          <li>Company context stored per-channel.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Admin</h3>
+        <ul>
+          <li>Manages connectors/tools in the Enterprise Search console.</li>
+          <li>Bot redirects admin actions to web console.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Authentication & Company Context</h2>
+    <ul>
+      <li><strong>Email extraction</strong> via Slack <code>users.info</code>; fallback from RBAC config.</li>
+      <li><strong>Middleware</strong>: <code>requireUserAuthentication</code> ensures access & company selection; persists in <code>SlackSessionModel</code>.</li>
+      <li><strong>Skip middleware case</strong>: <em>general</em> intent replies without hitting secured endpoints.</li>
+    </ul>
+
+    <h2>API Endpoints</h2>
+    <table>
+      <thead><tr><th>Endpoint</th><th>Method</th><th>Body</th></tr></thead>
+      <tbody>
+        <tr><td><code>/api/search</code></td><td>POST</td><td><code>{ query, limit?, company_id, user_email }</code></td></tr>
+        <tr><td><code>/api/suggested-documents</code></td><td>POST</td><td><code>{ company_id, user_email }</code></td></tr>
+        <tr><td><code>/api/trending-documents</code></td><td>POST</td><td><code>{ company_id, user_email }</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>Slack Formatting</h2>
+    <ul>
+      <li><strong>Search</strong>: Header with count/time; up to 5 results with title, preview, Open button, platform, score.</li>
+      <li><strong>Suggested</strong>: Header with count; items with preview, platform, file type, score, item reason; optional global reason.</li>
+      <li><strong>Trending</strong>: Items with preview and context; actions: Why this?, Search similar; Show more pagination. Defensive checks to avoid <code>invalid_blocks</code>.</li>
+    </ul>
+
+    <h2>Configuration</h2>
+    <ul>
+      <li><code>FASTAPI_BACKEND_URL</code> — Host only (no <code>/api</code> suffix).</li>
+      <li><code>DEFAULT_COMPANY_ID</code> — Fallback company.</li>
+      <li>Slack: <code>SLACK_BOT_TOKEN</code>, <code>SLACK_SIGNING_SECRET</code>, optional <code>SLACK_APP_TOKEN</code>.</li>
+      <li>Optional <code>ES_DASHBOARD_URL</code> for redirect buttons.</li>
+    </ul>
+
+    <h2>Key Files</h2>
+    <ul>
+      <li><code>app.js</code> — Events, auth, company selection, actions for trending interactivity.</li>
+      <li><code>src/handlers/queryHandler.js</code> — Intent dispatch and API calls.</li>
+      <li><code>src/services/apiService.js</code> — Axios client, RBAC fields & validation.</li>
+      <li><code>src/utils/formatter.js</code> — Block Kit rendering.</li>
+      <li><code>src/middleware/authenticateUser.js</code> — Access & company selection.</li>
+      <li><code>src/models/SlackSession.js</code> — Session persistence.</li>
+    </ul>
+
+    <h2>Troubleshooting</h2>
+    <ul>
+      <li><strong>422</strong>: Only whitelisted params; ensure <code>company_id</code> and <code>user_email</code>.</li>
+      <li><strong>404</strong>: Correct endpoints; no double <code>/api</code>.</li>
+      <li><strong>invalid_blocks</strong>: No placeholder URLs, no <code>action_id</code> on URL buttons, truncate previews.</li>
+      <li><strong>Port in use</strong>: Change <code>PORT</code> or free 3000.</li>
+    </ul>
+
+    <div class="footer">© Kroolo — Enterprise Search Slack Interface</div>
+  </main>
+</body>
+</html>
