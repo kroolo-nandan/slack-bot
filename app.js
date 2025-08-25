@@ -50,6 +50,134 @@ if (useSocketMode) {
       method: ['GET', 'HEAD'],
       handler: (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
+
+// Message Shortcut: Summarize the selected thread
+app.shortcut('summarize_thread_shortcut', async ({ ack, body, client, logger }) => {
+  try {
+    await ack();
+    const channelId = body.channel?.id;
+    const rootTs = body.message?.thread_ts || body.message?.ts; // summarize entire thread
+    const userId = body.user?.id;
+    const withThread = (payload) => (rootTs ? { ...payload, thread_ts: rootTs } : payload);
+
+    if (!channelId || !rootTs) return;
+
+    // Fetch thread messages
+    const replies = await client.conversations.replies({ channel: channelId, ts: rootTs, limit: 100 });
+    const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
+    if (!messages.length) {
+      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'No messages found in this thread.' }));
+      return;
+    }
+
+    const transcript = messages.map(m => {
+      const ts = new Date(parseFloat(m.ts) * 1000).toISOString();
+      const author = m.user || m.username || m.bot_profile?.name || 'unknown';
+      const text = (m.text || '').replace(/\s+/g, ' ').trim();
+      return `[${ts}] ${author}: ${text}`;
+    }).join('\n');
+
+    if (!nlpService.openaiClient) {
+      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'Summarization is unavailable (LLM not configured).' }));
+      return;
+    }
+
+    const prompt = `Summarize the following Slack thread into a concise, factual summary with key points and decisions. If action items appear, list them. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
+    const completion = await nlpService.openaiClient.chat.completions.create({
+      model: nlpService.getPowerfulModel(),
+      messages: [
+        { role: 'system', content: 'You are an expert meeting and conversation summarizer.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.3,
+      max_tokens: 350
+    });
+    const summary = completion.choices?.[0]?.message?.content?.trim() || 'Summary not available.';
+
+    await client.chat.postMessage(withThread({
+      channel: channelId,
+      text: '📝 Thread Summary',
+      blocks: [
+        { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
+        { type: 'section', text: { type: 'mrkdwn', text: summary } }
+      ]
+    }));
+  } catch (error) {
+    logger.error('Error in summarize_thread_shortcut:', error);
+  }
+});
+
+// Message Shortcut: Search from the selected thread (with modal input)
+app.shortcut('search_from_thread_shortcut', async ({ ack, body, client, logger }) => {
+  try {
+    await ack();
+    const channelId = body.channel?.id;
+    const rootTs = body.message?.thread_ts || body.message?.ts;
+    if (!channelId || !rootTs) return;
+
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: {
+        type: 'modal',
+        callback_id: 'search_from_thread_submit',
+        private_metadata: JSON.stringify({ channelId, rootTs, userId: body.user?.id }),
+        title: { type: 'plain_text', text: 'Search from thread', emoji: true },
+        submit: { type: 'plain_text', text: 'Search', emoji: true },
+        close: { type: 'plain_text', text: 'Cancel', emoji: true },
+        blocks: [
+          { type: 'input', block_id: 'q_block', label: { type: 'plain_text', text: 'Query', emoji: true }, element: { type: 'plain_text_input', action_id: 'q_action', placeholder: { type: 'plain_text', text: 'e.g., quarterly plan' } } }
+        ]
+      }
+    });
+  } catch (error) {
+    logger.error('Error opening search_from_thread modal:', error);
+  }
+});
+
+// Modal submit for search_from_thread
+app.view('search_from_thread_submit', async ({ ack, body, view, client, logger }) => {
+  try {
+    await ack();
+    const meta = JSON.parse(view?.private_metadata || '{}');
+    const channelId = meta.channelId;
+    const rootTs = meta.rootTs;
+    const userId = meta.userId || body.user?.id;
+    const withThread = (payload) => (rootTs ? { ...payload, thread_ts: rootTs } : payload);
+
+    const values = view.state.values || {};
+    const query = values?.q_block?.q_action?.value?.trim();
+    if (!query) return;
+
+    // Fetch user email for RBAC
+    let userEmail = null;
+    try {
+      const ui = await client.users.info({ user: userId });
+      userEmail = ui?.user?.profile?.email || null;
+    } catch (e) {
+      logger.warn('users.info failed in search_from_thread_submit:', e.message);
+    }
+
+    // Company context
+    let sessionCompanyId = null;
+    try {
+      const existingSession = await SlackSessionModel.findOne({ slackUserId: userId, channelId });
+      sessionCompanyId = existingSession?.companyId || null;
+    } catch (e) {
+      logger.warn('SlackSession read failed in search_from_thread_submit:', e.message);
+    }
+
+    const resp = await apiService.callAPI('search', { user_query: query }, userId, userEmail, sessionCompanyId);
+    if (resp.error) {
+      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: `❌ Search failed: ${resp.error}` }));
+      return;
+    }
+
+    const blocks = formatResponse(resp.data, 'search');
+    await client.chat.postMessage(withThread({ channel: channelId, blocks, text: `Search results for "${query}"` }));
+  } catch (error) {
+    logger.error('Error in search_from_thread_submit:', error);
+  }
+});
         res.end('Kroolo Enterprise Search Slack Bot is running!');
       }
     },

@@ -250,5 +250,3 @@ DRAFT_*.md
 # Create .env.example as a template (without real values)
 !.env.example
 
-
-.gw
