@@ -788,6 +788,134 @@ app.action('search_show_more', async ({ ack, body, client, logger }) => {
   }
 });
 
+// Slash command: /find → runs enterprise search with provided query
+app.command('/find', async ({ ack, body, client, logger }) => {
+  try {
+    await ack();
+    const channelId = body.channel_id;
+    const userId = body.user_id;
+    const rawQuery = (body.text || '').trim();
+    // Maintain thread context if invoked in a thread
+    const threadTs = body.thread_ts || body.message_ts;
+    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+
+    if (!rawQuery) {
+      await client.chat.postEphemeral(withThread({
+        channel: channelId,
+        user: userId,
+        text: 'Usage: /find <your search query>'
+      }));
+      return;
+    }
+
+    // Get user email for RBAC
+    let userEmail = null;
+    try {
+      const ui = await client.users.info({ user: userId });
+      userEmail = ui?.user?.profile?.email || null;
+    } catch (e) {
+      logger.warn('users.info failed for /find:', e.message);
+    }
+
+    // Get selected company from SlackSession (per-channel)
+    let sessionCompanyId = null;
+    try {
+      const existingSession = await SlackSessionModel.findOne({ slackUserId: userId, channelId });
+      sessionCompanyId = existingSession?.companyId || null;
+    } catch (e) {
+      logger.warn('SlackSession read failed in /find:', e.message);
+    }
+
+    // Call search API
+    const resp = await apiService.callAPI('search', { user_query: rawQuery }, userId, userEmail, sessionCompanyId);
+    if (resp.error) {
+      await client.chat.postEphemeral(withThread({
+        channel: channelId,
+        user: userId,
+        text: `❌ Search failed: ${resp.error}`
+      }));
+      return;
+    }
+
+    const blocks = formatResponse(resp.data, 'search');
+    await client.chat.postMessage(withThread({ channel: channelId, blocks, text: `Search results for "${rawQuery}"` }));
+  } catch (error) {
+    logger.error('Error in /find command:', error);
+  }
+});
+
+// Slash command: /summarize-thread → summarizes the current thread
+app.command('/summarize-thread', async ({ ack, body, client, logger }) => {
+  try {
+    await ack();
+    const channelId = body.channel_id;
+    const userId = body.user_id;
+    const threadTs = body.thread_ts || body.message_ts; // require a thread context
+    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+
+    if (!threadTs) {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: 'Please run /summarize-thread inside a thread so I can summarize it.'
+      });
+      return;
+    }
+
+    // Fetch thread messages
+    const replies = await client.conversations.replies({ channel: channelId, ts: threadTs, limit: 100 });
+    const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
+    if (!messages.length) {
+      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'No messages found in this thread.' }));
+      return;
+    }
+
+    // Build a compact transcript
+    const transcript = messages.map(m => {
+      const ts = new Date(parseFloat(m.ts) * 1000).toISOString();
+      const author = m.user || m.username || m.bot_profile?.name || 'unknown';
+      const text = (m.text || '').replace(/\s+/g, ' ').trim();
+      return `[${ts}] ${author}: ${text}`;
+    }).join('\n');
+
+    // Use OpenAI via nlpService if available
+    if (!nlpService.openaiClient) {
+      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'Summarization is unavailable (LLM not configured).' }));
+      return;
+    }
+
+    const prompt = `Summarize the following Slack thread into a concise, factual summary with key points and decisions. If action items appear, list them. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
+    const completion = await nlpService.openaiClient.chat.completions.create({
+      model: nlpService.getPowerfulModel(),
+      messages: [
+        { role: 'system', content: 'You are an expert meeting and conversation summarizer.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.3,
+      max_tokens: 350
+    });
+    const summary = completion.choices?.[0]?.message?.content?.trim() || 'Summary not available.';
+
+    await client.chat.postMessage(withThread({
+      channel: channelId,
+      text: '📝 Thread Summary',
+      blocks: [
+        { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
+        { type: 'section', text: { type: 'mrkdwn', text: summary } }
+      ]
+    }));
+  } catch (error) {
+    logger.error('Error in /summarize-thread command:', error);
+    try {
+      const channelId = body.channel_id;
+      const userId = body.user_id;
+      const threadTs = body.thread_ts || body.message_ts;
+      const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: `❌ Summarization failed: ${error.message}` }));
+    } catch (_) { /* ignore */ }
+  }
+});
+
 // Handle direct messages
 app.message(async ({ message, client, logger }) => {
   // Only respond to direct messages (not channel messages)
