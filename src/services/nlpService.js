@@ -1,17 +1,3 @@
-    // Summarize thread fallback
-    if (/\b(summarize|summary|tl;dr|tldr)\b/.test(queryLower) && queryLower.includes('thread')) {
-      return {
-        intent: 'summarize_threads',
-        domain: null,
-        parameters: {},
-        action: 'summarizeThread',
-        confidence: 0.85,
-        reasoning: 'Fallback pattern matching',
-        type: 'actionable',
-        provider: 'fallback'
-      };
-    }
-
 // Enhanced AI-Powered Natural Language Processing Service - Unified Intent Engine
 
 const OpenAI = require('openai');
@@ -271,6 +257,20 @@ Return ONLY the JSON object. No code fences, no markdown, no explanatory text.`;
         },
         action: 'callSearchApi',
         confidence: 0.6,
+        reasoning: 'Fallback pattern matching',
+        type: 'actionable',
+        provider: 'fallback'
+      };
+    }
+
+    // Summarize thread fallback
+    if (/\b(summarize|summary|tl;dr|tldr)\b/.test(queryLower) && queryLower.includes('thread')) {
+      return {
+        intent: 'summarize_threads',
+        domain: null,
+        parameters: {},
+        action: 'summarizeThread',
+        confidence: 0.85,
         reasoning: 'Fallback pattern matching',
         type: 'actionable',
         provider: 'fallback'

@@ -36,13 +36,7 @@ if (useSocketMode) {
   console.log('📡 Socket Mode enabled for local development');
 } else {
   console.log('🌐 HTTP Mode enabled for production deployment');
-  if (useSocketMode) {
-  appConfig.socketMode = true;
-  appConfig.appToken = process.env.SLACK_APP_TOKEN;
-  console.log('📡 Socket Mode enabled for local development');
-} else {
-  console.log('🌐 HTTP Mode enabled for production deployment');
-  
+
   // ✅ SIMPLE: Add health routes using customRoutes
   appConfig.customRoutes = [
     {
@@ -198,8 +192,6 @@ global.__KROOLO_SHORTCUTS__ = true;
   ];
   
   console.log('✅ Health endpoints configured via customRoutes');
-}
-
 }
 
 const app = new App(appConfig);
