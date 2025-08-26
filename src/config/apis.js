@@ -2,13 +2,14 @@
 // Aligns with FastAPI backend endpoints defined in `final_complete/fastapi_main.py`
 
 const API_ENDPOINTS = {
-  search: {
-    endpoint: '/search',
+   search: {
+    endpoint: '/search',  // Updated to match your endpoint
     method: 'POST',
-    description: 'Search documents (body: user_query)',
-    parameters: ['user_query'],
+    description: 'Search documents with streaming response',
+    parameters: ['user_query', 'user_email', 'user_id', 'company_id'],
     keywords: ['search', 'find', 'look', 'query', 'documents', 'files'],
-    requiresAuth: false
+    requiresAuth: true,
+    streaming: true // Add streaming flag
   },
   'search-analytics': {
     endpoint: '/api/search-analytics',

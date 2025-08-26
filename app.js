@@ -5,11 +5,11 @@ const nlpService = require('./src/services/nlpService');
 const { formatResponse } = require('./src/utils/formatter');
 const apiService = require('./src/services/apiService');
 const databaseConfig = require('./src/config/database');
-// const { requireUserAuthentication } = require('./src/middleware/authenticateUser');
 const SlackSessionModel = require('./src/models/SlackSession');
 const MembersModel = require('./src/models/Members');
 const CompanyModel = require('./src/models/Company');
 const { ExpressReceiver } = require('@slack/bolt');
+
 // Load environment variables
 dotenv.config();
 
@@ -18,9 +18,62 @@ const isProduction = process.env.NODE_ENV === 'production';
 const useSocketMode = process.env.USE_SOCKET_MODE !== 'false' && (process.env.USE_SOCKET_MODE === 'true' || !isProduction);
 
 console.log('🔧 Bot Configuration:');
-console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-console.log(`   Socket Mode: ${useSocketMode ? 'Enabled' : 'Disabled'}`);
-console.log(`   Port: ${process.env.PORT || 3000}`);
+console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
+console.log(` Socket Mode: ${useSocketMode ? 'Enabled' : 'Disabled'}`);
+console.log(` Port: ${process.env.PORT || 3000}`);
+
+// ✅ ADD: Slack response size validation function
+function validateSlackBlocks(blocks) {
+  try {
+    const blocksJson = JSON.stringify(blocks);
+    const size = new TextEncoder().encode(blocksJson).length;
+    
+    console.log(`📏 Slack blocks size: ${size} bytes`);
+    
+    // Slack's limits: 50KB total payload, 3000 chars per text block
+    if (size > 45000) { // Leave 5KB buffer
+      console.log(`⚠️ Blocks too large (${size} bytes), using fallback message`);
+      
+      return [{
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `🔍 Search completed successfully but results are too large to display in Slack.\n\n*What you can do:*\n• Try a more specific search query\n• Use the Enterprise Search dashboard for full results\n• Contact your admin for help with large result sets`
+        }
+      }];
+    }
+    
+    // Check individual text blocks
+    const validatedBlocks = blocks.map(block => {
+      if (block.text && block.text.text && block.text.text.length > 2900) {
+        return {
+          ...block,
+          text: {
+            ...block.text,
+            text: block.text.text.substring(0, 2900) + "... [truncated]"
+          }
+        };
+      }
+      return block;
+    });
+    
+    return validatedBlocks;
+  } catch (error) {
+    console.error('❌ Error validating blocks:', error);
+    return [{
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "❌ Sorry, there was an error formatting the response."
+      }
+    }];
+  }
+}
+
+// ✅ ADD: Thread helper function
+function createThreadHelper(threadTs) {
+  return (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+}
 
 // Initialize Slack app with deployment-aware configuration
 const appConfig = {
@@ -36,160 +89,167 @@ if (useSocketMode) {
   console.log('📡 Socket Mode enabled for local development');
 } else {
   console.log('🌐 HTTP Mode enabled for production deployment');
-
-  // ✅ SIMPLE: Add health routes using customRoutes
+  
   appConfig.customRoutes = [
     {
       path: '/',
       method: ['GET', 'HEAD'],
       handler: (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
+        
+        // Register message shortcuts once
+        if (!global.__KROOLO_SHORTCUTS__) {
+          // Message Shortcut: Summarize the selected thread
+          app.shortcut('summarize_thread_shortcut', async ({ ack, body, client, logger }) => {
+            try {
+              await ack();
+              const channelId = body.channel?.id;
+              const rootTs = body.message?.thread_ts || body.message?.ts;
+              const userId = body.user?.id;
+              const withThread = createThreadHelper(rootTs);
 
-// Register message shortcuts once (avoid multiple ack due to double registration)
-if (!global.__KROOLO_SHORTCUTS__) {
+              if (!channelId || !rootTs) return;
 
-// Message Shortcut: Summarize the selected thread
-app.shortcut('summarize_thread_shortcut', async ({ ack, body, client, logger }) => {
-  try {
-    await ack();
-    const channelId = body.channel?.id;
-    const rootTs = body.message?.thread_ts || body.message?.ts; // summarize entire thread
-    const userId = body.user?.id;
-    const withThread = (payload) => (rootTs ? { ...payload, thread_ts: rootTs } : payload);
+              // Fetch thread messages
+              const replies = await client.conversations.replies({ channel: channelId, ts: rootTs, limit: 100 });
+              const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
 
-    if (!channelId || !rootTs) return;
+              if (!messages.length) {
+                await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'No messages found in this thread.' }));
+                return;
+              }
 
-    // Fetch thread messages
-    const replies = await client.conversations.replies({ channel: channelId, ts: rootTs, limit: 100 });
-    const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
-    if (!messages.length) {
-      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'No messages found in this thread.' }));
-      return;
-    }
+              // Resolve Slack user IDs to human-readable display names
+              const userIds = [...new Set(messages.map(m => m.user).filter(Boolean))];
+              const nameMap = {};
+              for (const uid of userIds) {
+                try {
+                  const ui = await client.users.info({ user: uid });
+                  nameMap[uid] = ui?.user?.profile?.display_name || ui?.user?.profile?.real_name || ui?.user?.name || uid;
+                } catch (_) {
+                  nameMap[uid] = uid;
+                }
+              }
 
-    // Resolve Slack user IDs to human-readable display names
-    const userIds = [...new Set(messages.map(m => m.user).filter(Boolean))];
-    const nameMap = {};
-    for (const uid of userIds) {
-      try {
-        const ui = await client.users.info({ user: uid });
-        nameMap[uid] = ui?.user?.profile?.display_name || ui?.user?.profile?.real_name || ui?.user?.name || uid;
-      } catch (_) {
-        nameMap[uid] = uid;
-      }
-    }
+              const transcript = messages.map(m => {
+                const ts = new Date(parseFloat(m.ts) * 1000).toISOString();
+                const author = (m.user && nameMap[m.user]) || m.username || m.bot_profile?.name || 'unknown';
+                const text = (m.text || '').replace(/\s+/g, ' ').trim();
+                return `[${ts}] ${author}: ${text}`;
+              }).join('\n');
 
-    const transcript = messages.map(m => {
-      const ts = new Date(parseFloat(m.ts) * 1000).toISOString();
-      const author = (m.user && nameMap[m.user]) || m.username || m.bot_profile?.name || 'unknown';
-      const text = (m.text || '').replace(/\s+/g, ' ').trim();
-      return `[${ts}] ${author}: ${text}`;
-    }).join('\n');
+              if (!nlpService.openaiClient) {
+                await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'Summarization is unavailable (LLM not configured).' }));
+                return;
+              }
 
-    if (!nlpService.openaiClient) {
-      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'Summarization is unavailable (LLM not configured).' }));
-      return;
-    }
+              const prompt = `Summarize the following Slack thread into a concise, factual summary. Focus on: key points, decisions, outcomes, and clear action items (with owners if evident). Avoid quoting raw Slack user IDs; refer to participants by their display names. Ignore greetings and bot boilerplate. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
 
-    const prompt = `Summarize the following Slack thread into a concise, factual summary. Focus on: key points, decisions, outcomes, and clear action items (with owners if evident). Avoid quoting raw Slack user IDs; refer to participants by their display names. Ignore greetings and bot boilerplate. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
-    const completion = await nlpService.openaiClient.chat.completions.create({
-      model: nlpService.getPowerfulModel(),
-      messages: [
-        { role: 'system', content: 'You are an expert meeting and conversation summarizer.' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.3,
-      max_tokens: 350
-    });
-    const summary = completion.choices?.[0]?.message?.content?.trim() || 'Summary not available.';
+              const completion = await nlpService.openaiClient.chat.completions.create({
+                model: nlpService.getPowerfulModel(),
+                messages: [
+                  { role: 'system', content: 'You are an expert meeting and conversation summarizer.' },
+                  { role: 'user', content: prompt }
+                ],
+                temperature: 0.3,
+                max_tokens: 350
+              });
 
-    await client.chat.postMessage(withThread({
-      channel: channelId,
-      text: '📝 Thread Summary',
-      blocks: [
-        { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
-        { type: 'section', text: { type: 'mrkdwn', text: summary } }
-      ]
-    }));
-  } catch (error) {
-    logger.error('Error in summarize_thread_shortcut:', error);
-  }
-});
+              const summary = completion.choices?.[0]?.message?.content?.trim() || 'Summary not available.';
 
-// Message Shortcut: Search from the selected thread (with modal input)
-app.shortcut('search_from_thread_shortcut', async ({ ack, body, client, logger }) => {
-  try {
-    await ack();
-    const channelId = body.channel?.id;
-    const rootTs = body.message?.thread_ts || body.message?.ts;
-    if (!channelId || !rootTs) return;
+              const blocks = validateSlackBlocks([
+                { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
+                { type: 'section', text: { type: 'mrkdwn', text: summary } }
+              ]);
 
-    await client.views.open({
-      trigger_id: body.trigger_id,
-      view: {
-        type: 'modal',
-        callback_id: 'search_from_thread_submit',
-        private_metadata: JSON.stringify({ channelId, rootTs, userId: body.user?.id }),
-        title: { type: 'plain_text', text: 'Search from thread', emoji: true },
-        submit: { type: 'plain_text', text: 'Search', emoji: true },
-        close: { type: 'plain_text', text: 'Cancel', emoji: true },
-        blocks: [
-          { type: 'input', block_id: 'q_block', label: { type: 'plain_text', text: 'Query', emoji: true }, element: { type: 'plain_text_input', action_id: 'q_action', placeholder: { type: 'plain_text', text: 'e.g., quarterly plan' } } }
-        ]
-      }
-    });
-  } catch (error) {
-    logger.error('Error opening search_from_thread modal:', error);
-  }
-});
+              await client.chat.postMessage(withThread({
+                channel: channelId,
+                text: '📝 Thread Summary',
+                blocks
+              }));
+            } catch (error) {
+              logger.error('Error in summarize_thread_shortcut:', error);
+            }
+          });
 
-// Modal submit for search_from_thread
-app.view('search_from_thread_submit', async ({ ack, body, view, client, logger }) => {
-  try {
-    await ack();
-    const meta = JSON.parse(view?.private_metadata || '{}');
-    const channelId = meta.channelId;
-    const rootTs = meta.rootTs;
-    const userId = meta.userId || body.user?.id;
-    const withThread = (payload) => (rootTs ? { ...payload, thread_ts: rootTs } : payload);
+          // Message Shortcut: Search from the selected thread
+          app.shortcut('search_from_thread_shortcut', async ({ ack, body, client, logger }) => {
+            try {
+              await ack();
+              const channelId = body.channel?.id;
+              const rootTs = body.message?.thread_ts || body.message?.ts;
 
-    const values = view.state.values || {};
-    const query = values?.q_block?.q_action?.value?.trim();
-    if (!query) return;
+              if (!channelId || !rootTs) return;
 
-    // Fetch user email for RBAC
-    let userEmail = null;
-    try {
-      const ui = await client.users.info({ user: userId });
-      userEmail = ui?.user?.profile?.email || null;
-    } catch (e) {
-      logger.warn('users.info failed in search_from_thread_submit:', e.message);
-    }
+              await client.views.open({
+                trigger_id: body.trigger_id,
+                view: {
+                  type: 'modal',
+                  callback_id: 'search_from_thread_submit',
+                  private_metadata: JSON.stringify({ channelId, rootTs, userId: body.user?.id }),
+                  title: { type: 'plain_text', text: 'Search from thread', emoji: true },
+                  submit: { type: 'plain_text', text: 'Search', emoji: true },
+                  close: { type: 'plain_text', text: 'Cancel', emoji: true },
+                  blocks: [
+                    { type: 'input', block_id: 'q_block', label: { type: 'plain_text', text: 'Query', emoji: true }, element: { type: 'plain_text_input', action_id: 'q_action', placeholder: { type: 'plain_text', text: 'e.g., quarterly plan' } } }
+                  ]
+                }
+              });
+            } catch (error) {
+              logger.error('Error opening search_from_thread modal:', error);
+            }
+          });
 
-    // Company context
-    let sessionCompanyId = null;
-    try {
-      const existingSession = await SlackSessionModel.findOne({ slackUserId: userId, channelId });
-      sessionCompanyId = existingSession?.companyId || null;
-    } catch (e) {
-      logger.warn('SlackSession read failed in search_from_thread_submit:', e.message);
-    }
+          // Modal submit for search_from_thread
+          app.view('search_from_thread_submit', async ({ ack, body, view, client, logger }) => {
+            try {
+              await ack();
+              const meta = JSON.parse(view?.private_metadata || '{}');
+              const channelId = meta.channelId;
+              const rootTs = meta.rootTs;
+              const userId = meta.userId || body.user?.id;
+              const withThread = createThreadHelper(rootTs);
 
-    const resp = await apiService.callAPI('search', { user_query: query }, userId, userEmail, sessionCompanyId);
-    if (resp.error) {
-      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: `❌ Search failed: ${resp.error}` }));
-      return;
-    }
+              const values = view.state.values || {};
+              const query = values?.q_block?.q_action?.value?.trim();
 
-    const blocks = formatResponse(resp.data, 'search');
-    await client.chat.postMessage(withThread({ channel: channelId, blocks, text: `Search results for "${query}"` }));
-  } catch (error) {
-    logger.error('Error in search_from_thread_submit:', error);
-  }
-});
+              if (!query) return;
 
-global.__KROOLO_SHORTCUTS__ = true;
-}
+              // Fetch user email for RBAC
+              let userEmail = null;
+              try {
+                const ui = await client.users.info({ user: userId });
+                userEmail = ui?.user?.profile?.email || null;
+              } catch (e) {
+                logger.warn('users.info failed in search_from_thread_submit:', e.message);
+              }
+
+              // Company context
+              let sessionCompanyId = null;
+              try {
+                const existingSession = await SlackSessionModel.findOne({ slackUserId: userId, channelId });
+                sessionCompanyId = existingSession?.companyId || null;
+              } catch (e) {
+                logger.warn('SlackSession read failed in search_from_thread_submit:', e.message);
+              }
+
+              const resp = await apiService.callAPI('search', { user_query: query }, userId, userEmail, sessionCompanyId);
+
+              if (resp.error) {
+                await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: `❌ Search failed: ${resp.error}` }));
+                return;
+              }
+
+              const blocks = validateSlackBlocks(formatResponse(resp.data, 'search'));
+              await client.chat.postMessage(withThread({ channel: channelId, blocks, text: `Search results for "${query}"` }));
+            } catch (error) {
+              logger.error('Error in search_from_thread_submit:', error);
+            }
+          });
+
+          global.__KROOLO_SHORTCUTS__ = true;
+        }
+
         res.end('Kroolo Enterprise Search Slack Bot is running!');
       }
     },
@@ -202,12 +262,10 @@ global.__KROOLO_SHORTCUTS__ = true;
       }
     }
   ];
-  
   console.log('✅ Health endpoints configured via customRoutes');
 }
 
 const app = new App(appConfig);
-
 
 // Helper: detect admin-tool intents (connect/disconnect/status)
 function isAdminToolIntent(text) {
@@ -226,6 +284,7 @@ function buildEsRedirectBlocks() {
     '• If you are a user, contact your admin.',
     '• If you are an admin, click below to open Enterprise Search.'
   ].join('\n');
+  
   return [
     { type: 'section', text: { type: 'mrkdwn', text: `🔐 ${lines}` } },
     {
@@ -244,37 +303,29 @@ function buildEsRedirectBlocks() {
 
 // Helper: allow all users (fallback if not found)
 async function allowAllUserAuthentication({ email, client, channel, slackUserId, channelId }) {
-  // try {
-  //   const userId = await requireUserAuthentication({ email, client, channel, slackUserId, channelId });
-  //   if (userId) return userId;
-  //   // If not found, allow access (return a dummy userId)
-  //   return slackUserId || email || 'anonymous';
-  // } catch (e) {
-    return slackUserId || email || 'anonymous';
-  }
-
+  return slackUserId || email || 'anonymous';
+}
 
 // Handle app mentions
 app.event('app_mention', async ({ event, client, logger }) => {
   try {
     logger.info('App mention received:', event.text);
-    // Ensure replies stay in the same thread
+    
+    // ✅ FIX: Ensure replies stay in the same thread
     const threadTs = event.thread_ts || event.ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
 
     // Try to auto-join the channel if not a member (for public channels)
     try {
       await client.conversations.join({ channel: event.channel });
       logger.info('Joined channel successfully (or already a member).');
     } catch (joinErr) {
-      // Ignore if already in channel or cannot join (e.g., private channel)
       const code = joinErr?.data?.error || joinErr.message;
       logger.warn(`conversations.join skipped: ${code}`);
     }
-    
+
     // Extract the query (remove the bot mention)
     const query = event.text.replace(/<@\w+>/g, '').trim();
-    
     if (!query) {
       await client.chat.postMessage(withThread({
         channel: event.channel,
@@ -283,9 +334,10 @@ app.event('app_mention', async ({ event, client, logger }) => {
       return;
     }
 
-    // Intercept admin tool intents FIRST: redirect to ES (no Slack-side connect/status)
+    // Intercept admin tool intents FIRST: redirect to ES
     if (isAdminToolIntent(query)) {
-      await client.chat.postMessage(withThread({ channel: event.channel, blocks: buildEsRedirectBlocks() }));
+      const blocks = validateSlackBlocks(buildEsRedirectBlocks());
+      await client.chat.postMessage(withThread({ channel: event.channel, blocks }));
       return;
     }
 
@@ -301,53 +353,34 @@ app.event('app_mention', async ({ event, client, logger }) => {
       // If NLP fails, proceed with normal flow
     }
 
-    // Defer UX notice until after authentication
-
     // Get user info to extract email for API calls
     console.log('🔍 STEP 1: Attempting to extract Slack user email...');
-    console.log('   Target User ID:', event.user);
-    console.log('   Channel ID:', event.channel);
+    console.log(' Target User ID:', event.user);
+    console.log(' Channel ID:', event.channel);
 
     let userInfo = null;
     let extractedEmail = null;
-
+    
     try {
       console.log('📞 Making Slack API call: users.info...');
       userInfo = await client.users.info({ user: event.user });
-
       console.log('✅ Slack API Response received');
-      console.log('   User ID:', userInfo?.user?.id);
-      console.log('   User Name:', userInfo?.user?.name);
-      console.log('   Real Name:', userInfo?.user?.real_name);
-      console.log('   Profile Email:', userInfo?.user?.profile?.email);
-      console.log('   Profile Display Name:', userInfo?.user?.profile?.display_name);
-      console.log('   Is Bot:', userInfo?.user?.is_bot);
-      console.log('   Is Admin:', userInfo?.user?.is_admin);
-
+      
       extractedEmail = userInfo?.user?.profile?.email;
-
       if (extractedEmail) {
         console.log('✅ SUCCESS: Email extracted from Slack profile:', extractedEmail);
       } else {
         console.log('⚠️ WARNING: No email found in Slack profile');
-        console.log('   Profile object:', JSON.stringify(userInfo?.user?.profile, null, 2));
       }
-
     } catch (error) {
       console.log('❌ FAILED: Could not get Slack user info');
-      console.log('   Error Type:', error.constructor.name);
-      console.log('   Error Message:', error.message);
-      console.log('   Error Code:', error.code);
-      console.log('   Error Data:', error.data);
-
+      console.log(' Error Message:', error.message);
     }
 
     // Fallback email logic
     console.log('🔍 STEP 2: Determining email to use for API calls...');
     let finalEmail = extractedEmail;
-
     if (!finalEmail) {
-      // Try to get from RBAC config
       try {
         const { RBAC_CONFIG } = require('./src/config/apis');
         finalEmail = RBAC_CONFIG.user_email;
@@ -368,23 +401,18 @@ app.event('app_mention', async ({ event, client, logger }) => {
     });
 
     if (!userId) {
-      // User not authorized, middleware has sent the denial message, stop processing
       return;
     }
 
-    // Show typing indicator after auth is confirmed
+    // Show typing indicator
     await client.chat.postMessage(withThread({
       channel: event.channel,
       text: "🔍 Processing your query..."
     }));
 
     console.log('✅ FINAL EMAIL DECISION:', finalEmail);
-    console.log('   Source:', extractedEmail ? 'Slack Profile' : 'Fallback Config');
 
-    // Process the query with user context including email
-    console.log('🔍 STEP 3: Creating user context for query processing...');
-
-    // Fetch selected company context from SlackSession (per-channel)
+    // Fetch selected company context from SlackSession
     let sessionCompanyId = null;
     try {
       const existingSession = await SlackSessionModel.findOne({ slackUserId: event.user, channelId: event.channel });
@@ -395,20 +423,13 @@ app.event('app_mention', async ({ event, client, logger }) => {
 
     const userContext = {
       slackUserId: event.user,
-      slackEmail: finalEmail, // Use the determined final email
+      slackEmail: finalEmail,
       slackName: userInfo?.user?.name || null,
       slackRealName: userInfo?.user?.real_name || null,
-      extractedFromSlack: !!extractedEmail, // Track if email came from Slack
+      extractedFromSlack: !!extractedEmail,
       emailSource: extractedEmail ? 'slack_profile' : 'fallback_config',
       companyId: sessionCompanyId
     };
-
-    console.log('📋 User Context Created:', {
-      slackUserId: userContext.slackUserId,
-      slackEmail: userContext.slackEmail,
-      emailSource: userContext.emailSource,
-      extractedFromSlack: userContext.extractedFromSlack
-    });
 
     console.log('🔍 STEP 4: Starting query processing...');
     const result = await queryHandler.processQuery(query, userContext);
@@ -421,39 +442,46 @@ app.event('app_mention', async ({ event, client, logger }) => {
       return;
     }
 
-    // Handle control instructions from NLP (e.g., change company)
+    // Handle control instructions from NLP
     if (result.type === 'control' && result.action === 'initiateCompanyChange') {
       const session = await SlackSessionModel.findOne({ slackUserId: event.user, channelId: event.channel });
       const hasSelection = !!session?.companyId;
       const text = hasSelection ? 'Change your company context' : 'No company selected yet. Please choose your company to continue.';
       const value = JSON.stringify({ userId: String(userId), slackUserId: event.user, channelId: event.channel });
+
+      const blocks = validateSlackBlocks([
+        { type: 'section', text: { type: 'mrkdwn', text: hasSelection ? '*Change Company*' : '*Select Company*' } },
+        { type: 'actions', elements: [
+          { type: 'button', text: { type: 'plain_text', text: 'Choose company', emoji: true }, style: 'primary', action_id: 'open_company_picker', value }
+        ]}
+      ]);
+
       await client.chat.postEphemeral(withThread({
         channel: event.channel,
         user: event.user,
         text,
-        blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: hasSelection ? '*Change Company*' : '*Select Company*' } },
-          { type: 'actions', elements: [
-            { type: 'button', text: { type: 'plain_text', text: 'Choose company', emoji: true }, style: 'primary', action_id: 'open_company_picker', value }
-          ]}
-        ]
+        blocks
       }));
       return;
     }
 
-    // Handle summarize thread intent as a control action (use Slack thread context)
+    // Handle summarize thread intent
     if (result.type === 'control' && result.action === 'summarizeThread') {
       try {
         const channelId = event.channel;
-        // Enforce: only allow inside an existing thread
+        
         if (!event.thread_ts) {
-          await client.chat.postEphemeral(withThread({ channel: channelId, user: event.user, text: 'Summarize Thread works only inside an existing thread. Please open a thread and try again, or use the message shortcut from a thread.' }));
+          await client.chat.postEphemeral(withThread({ 
+            channel: channelId, 
+            user: event.user, 
+            text: 'Summarize Thread works only inside an existing thread. Please open a thread and try again, or use the message shortcut from a thread.' 
+          }));
           return;
         }
-        const rootTs = threadTs;
-        const withThread2 = (payload) => (rootTs ? { ...payload, thread_ts: rootTs } : payload);
 
-        // Ensure scope and membership (only attempts for public channels starting with 'C')
+        const rootTs = threadTs;
+        const withThread2 = createThreadHelper(rootTs);
+
         try {
           if (channelId && channelId.startsWith('C')) {
             await client.conversations.join({ channel: channelId });
@@ -462,12 +490,13 @@ app.event('app_mention', async ({ event, client, logger }) => {
 
         const replies = await client.conversations.replies({ channel: channelId, ts: rootTs, limit: 100 });
         const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
+
         if (!messages.length) {
           await client.chat.postEphemeral(withThread2({ channel: channelId, user: event.user, text: 'No messages found in this thread.' }));
           return;
         }
 
-        // Resolve Slack user IDs to human-readable display names
+        // Resolve Slack user IDs
         const userIds2 = [...new Set(messages.map(m => m.user).filter(Boolean))];
         const nameMap2 = {};
         for (const uid of userIds2) {
@@ -492,6 +521,7 @@ app.event('app_mention', async ({ event, client, logger }) => {
         }
 
         const prompt = `Summarize the following Slack thread into a concise, factual summary. Focus on: key points, decisions, outcomes, and clear action items (with owners if evident). Avoid quoting raw Slack user IDs; refer to participants by their display names. Ignore greetings and bot boilerplate. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
+
         const completion = await nlpService.openaiClient.chat.completions.create({
           model: nlpService.getPowerfulModel(),
           messages: [
@@ -501,19 +531,21 @@ app.event('app_mention', async ({ event, client, logger }) => {
           temperature: 0.3,
           max_tokens: 350
         });
+
         const summary = completion.choices?.[0]?.message?.content?.trim() || 'Summary not available.';
+
+        const blocks = validateSlackBlocks([
+          { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
+          { type: 'section', text: { type: 'mrkdwn', text: summary } }
+        ]);
 
         await client.chat.postMessage(withThread2({
           channel: channelId,
           text: '📝 Thread Summary',
-          blocks: [
-            { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
-            { type: 'section', text: { type: 'mrkdwn', text: summary } }
-          ]
+          blocks
         }));
       } catch (e) {
         logger.error('Error summarizing thread via intent:', e);
-        // Provide specific guidance for missing scopes
         const missing = e?.data?.error === 'missing_scope';
         const scopeMsg = missing ? 'Missing required Slack scopes. Please add: channels:history, groups:history, im:history, mpim:history, channels:read, groups:read, im:read, mpim:read, chat:write, channels:join (public channels only), and re-install the app.' : '';
         await client.chat.postEphemeral(withThread({ channel: event.channel, user: event.user, text: `❌ Failed to summarize thread: ${e.message}${scopeMsg ? '\n' + scopeMsg : ''}` }));
@@ -521,17 +553,14 @@ app.event('app_mention', async ({ event, client, logger }) => {
       return;
     }
 
-    // Check if this is a Pipedream response (has response_type, text, attachments)
+    // Check if this is a Pipedream response
     if (result.response_type && result.text) {
       console.log('🔗 Sending Pipedream response to Slack');
-
-      // Send Pipedream response directly
       const messagePayload = {
         channel: event.channel,
         text: result.text
       };
 
-      // Add attachments if present
       if (result.attachments) {
         messagePayload.attachments = result.attachments;
       }
@@ -540,68 +569,59 @@ app.event('app_mention', async ({ event, client, logger }) => {
       return;
     }
 
+    // Handle conversational responses FIRST
+    if (result.type === 'conversational' || result.message) {
+      await client.chat.postMessage(withThread({
+        channel: event.channel,
+        text: result.message
+      }));
+      return;
+    }
+
+    // Handle SlackHandler responses (blocks format)
+    if (result.blocks) {
+      const validatedBlocks = validateSlackBlocks(result.blocks);
+      await client.chat.postMessage(withThread({
+        channel: event.channel,
+        blocks: validatedBlocks
+      }));
+      return;
+    }
+
     // Handle regular Enterprise Search API responses
-  // Handle control (change company) in DM
-if (result.type === 'control' && result.action === 'initiateCompanyChange') {
-  const session = await SlackSessionModel.findOne({ slackUserId: message.user, channelId: message.channel });
-  const hasSelection = !!session?.companyId;
-  const text = hasSelection ? 'Change your company context' : 'No company selected yet. Please choose your company to continue.';
-  const value = JSON.stringify({ userId: String(userId), slackUserId: message.user, channelId: message.channel });
-  await client.chat.postEphemeral(withThread({
-    channel: message.channel,
-    user: message.user,
-    text,
-    blocks: [
-      { type: 'section', text: { type: 'mrkdwn', text: hasSelection ? '*Change Company*' : '*Select Company*' } },
-      { type: 'actions', elements: [
-        { type: 'button', text: { type: 'plain_text', text: 'Choose company', emoji: true }, style: 'primary', action_id: 'open_company_picker', value }
-      ]}
-    ]
-  }));
-  return;
-}
+    if (result.data) {
+      const formattedResponse = formatResponse(result.data, result.apiUsed);
+      const validatedBlocks = validateSlackBlocks(formattedResponse);
+      
+      await client.chat.postMessage(withThread({
+        channel: event.channel,
+        text: `Search results for your query`,
+        blocks: validatedBlocks
+      }));
+      return;
+    }
 
-// Handle conversational responses FIRST
-if (result.type === 'conversational' || result.message) {
-  await client.chat.postMessage(withThread({
-    channel: event.channel,
-    text: result.message
-  }));
-  return;
-}
-
-// Handle SlackHandler responses (blocks format)
-if (result.blocks) {
-  await client.chat.postMessage(withThread({
-    channel: event.channel,
-    blocks: result.blocks
-  }));
-  return;
-}
-
-// Handle regular Enterprise Search API responses
-if (result.data) {
-  const formattedResponse = formatResponse(result.data, result.apiUsed);
-  await client.chat.postMessage(withThread({
-    channel: event.channel,
-    text: `Search results for your query`,
-    blocks: formattedResponse
-  }));
-  return;
-}
-
-// Fallback for unexpected response structure
-await client.chat.postMessage(withThread({
-  channel: event.channel,
-  text: "I processed your request, but couldn't format the response properly."
-}));
+    // Fallback for unexpected response structure
+    await client.chat.postMessage(withThread({
+      channel: event.channel,
+      text: "I processed your request, but couldn't format the response properly."
+    }));
 
   } catch (error) {
     logger.error('Error handling app mention:', error);
-    await client.chat.postMessage(withThread({
-      channel: event.channel,
-      text: `❌ Sorry, I encountered an error: ${error.message}`
-    }));
+    
+    // ✅ FIX: Use proper thread helper
+    const threadTs = event.thread_ts || event.ts;
+    const withThread = createThreadHelper(threadTs);
+    
+    try {
+      await client.chat.postMessage(withThread({
+        channel: event.channel,
+        text: `❌ Sorry, I encountered an error: ${error.message}`
+      }));
+    } catch (sayError) {
+      console.error('❌ Failed to send error message to Slack:', sayError);
+    }
   }
 });
 
@@ -609,21 +629,19 @@ await client.chat.postMessage(withThread({
 app.action('open_company_picker', async ({ ack, body, client, logger }) => {
   try {
     await ack();
-    // Maintain thread context if action triggered in a thread
     const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
+
     const action = body?.actions?.[0];
-    // ✅ ADD THIS DEBUG
     console.log('🔘 Company picker button clicked!');
-    console.log('   User:', body.user.id);
-    console.log('   Button value:', body.actions[0]?.value);
+
     let payload = {};
     try { payload = action?.value ? JSON.parse(action.value) : {}; } catch (_) { payload = {}; }
-    let userId = payload.userId; // backend userId
+
+    let userId = payload.userId;
     const slackUserId = payload.slackUserId || body.user.id;
     const channelId = payload.channelId || body.channel?.id || body.container?.channel_id;
 
-    // Resolve userId if missing using auth middleware (fetch email first)
     if (!userId) {
       try {
         const info = await client.users.info({ user: slackUserId });
@@ -632,18 +650,17 @@ app.action('open_company_picker', async ({ ack, body, client, logger }) => {
       } catch (e) {
         logger.warn('Unable to resolve userId for modal open:', e);
       }
-      if (!userId) {
-        // Instead of blocking, just skip company selection and allow access
-        await client.chat.postEphemeral(withThread({
-          channel: channelId,
-          user: slackUserId,
-          text: 'Could not load companies. You can continue using the bot.'
-        }));
-        return;
-      }
     }
 
-    // Fetch memberships and companies
+    if (!userId) {
+      await client.chat.postEphemeral(withThread({
+        channel: channelId,
+        user: slackUserId,
+        text: 'Could not load companies. You can continue using the bot.'
+      }));
+      return;
+    }
+
     const memberships = await MembersModel.find({ userId, status: 'ACTIVE' });
     if (!memberships || memberships.length === 0) {
       await client.chat.postEphemeral(withThread({
@@ -653,6 +670,7 @@ app.action('open_company_picker', async ({ ack, body, client, logger }) => {
       }));
       return;
     }
+
     const companyIds = memberships.map(m => String(m.companyId));
     const companies = await CompanyModel.find({ companyId: { $in: companyIds } });
     const nameByCompanyId = new Map();
@@ -703,11 +721,12 @@ app.view('company_picker_submit', async ({ ack, body, view, client, logger }) =>
 
     const values = view.state.values || {};
     const selected = values?.company_select_block?.company_select_action?.selected_option;
-    if (!selected) {
-      return; // Slack will keep modal; no selection
-    }
+
+    if (!selected) return;
+
     let parsed = {};
     try { parsed = selected.value ? JSON.parse(selected.value) : {}; } catch (_) { parsed = {}; }
+
     const { companyId, role } = parsed;
     if (!companyId) return;
 
@@ -717,7 +736,6 @@ app.view('company_picker_submit', async ({ ack, body, view, client, logger }) =>
       { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
     );
 
-    // Modal submissions don't have thread context; send ephemeral without thread_ts
     await client.chat.postEphemeral({
       channel: channelId,
       user: slackUserId,
@@ -732,17 +750,14 @@ app.view('company_picker_submit', async ({ ack, body, view, client, logger }) =>
 app.action('connect_tool', async ({ ack, body, client, logger }) => {
   try {
     await ack();
-    // Maintain thread context if action triggered in a thread
     const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
 
     const toolName = body.actions[0].value;
     const userId = body.user.id;
 
     console.log('🔘 Button clicked - Connect tool:', toolName);
-    console.log('👤 User:', userId);
 
-    // Get user info for email
     let userInfo = null;
     try {
       userInfo = await client.users.info({ user: userId });
@@ -754,10 +769,9 @@ app.action('connect_tool', async ({ ack, body, client, logger }) => {
 
     // Handle specific tool connection
     const connectToolsHandler = require('./src/handlers/connectToolsHandler');
-
     let result;
+
     if (toolName === 'any_tool') {
-      // Show general connect interface
       const pipedreamService = require('./src/services/pipedreamService');
       const externalUserId = userEmail || userId;
       const connectData = await pipedreamService.createConnectToken(externalUserId);
@@ -781,24 +795,23 @@ app.action('connect_tool', async ({ ack, body, client, logger }) => {
         }]
       };
     } else if (toolName === 'slack') {
-      // Handle Slack apps connection
       const slackHandler = require('./src/handlers/slackHandler');
       result = await slackHandler.handleConnectCommand(userId);
     } else {
-      // Handle specific tool connection
       result = await connectToolsHandler.handleSpecificToolConnection(userId, toolName, userEmail);
     }
 
-    // Send response
     await client.chat.postEphemeral(withThread({
       channel: body.channel.id,
       user: userId,
       text: result.text,
       attachments: result.attachments
     }));
-
   } catch (error) {
     logger.error('Error handling button click:', error);
+    const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
+    const withThread = createThreadHelper(threadTs);
+    
     await client.chat.postEphemeral(withThread({
       channel: body.channel.id,
       user: body.user.id,
@@ -811,9 +824,9 @@ app.action('connect_tool', async ({ ack, body, client, logger }) => {
 app.action('select_company', async ({ ack, body, client, logger }) => {
   try {
     await ack();
-    // Maintain thread context if action triggered in a thread
     const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
+
     const action = body?.actions?.[0];
     let parsed = {};
     try {
@@ -821,6 +834,7 @@ app.action('select_company', async ({ ack, body, client, logger }) => {
     } catch (e) {
       parsed = {};
     }
+
     const { companyId, role, userId, slackUserId } = parsed;
     const channelId = parsed.channelId || body?.channel?.id;
 
@@ -846,6 +860,9 @@ app.action('select_company', async ({ ack, body, client, logger }) => {
     }));
   } catch (error) {
     logger.error('Error handling select_company action:', error);
+    const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
+    const withThread = createThreadHelper(threadTs);
+    
     await client.chat.postEphemeral(withThread({
       channel: body.channel.id,
       user: body.user.id,
@@ -858,12 +875,17 @@ app.action('select_company', async ({ ack, body, client, logger }) => {
 app.action(/trending_why_/, async ({ ack, body, client, logger }) => {
   try {
     await ack();
+    const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
+    const withThread = createThreadHelper(threadTs);
+
     const action = body?.actions?.[0];
     let payload = {};
     try { payload = action?.value ? JSON.parse(action.value) : {}; } catch (_) { payload = {}; }
+
     const title = payload.title || 'this document';
     const why = payload.why || 'No specific reason provided by the backend.';
     const score = typeof payload.score === 'number' ? payload.score : undefined;
+
     const lines = [
       `• Title: ${title}`,
       payload.platform ? `• Platform: ${payload.platform}` : null,
@@ -885,10 +907,15 @@ app.action(/trending_why_/, async ({ ack, body, client, logger }) => {
 app.action(/trending_similar_/, async ({ ack, body, client, logger }) => {
   try {
     await ack();
+    const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
+    const withThread = createThreadHelper(threadTs);
+
     const action = body?.actions?.[0];
     let payload = {};
     try { payload = action?.value ? JSON.parse(action.value) : {}; } catch (_) { payload = {}; }
+
     const title = payload.title || 'this document';
+
     await client.chat.postEphemeral(withThread({
       channel: body.channel.id,
       user: body.user.id,
@@ -903,9 +930,8 @@ app.action(/trending_similar_/, async ({ ack, body, client, logger }) => {
 app.action('trending_show_more', async ({ ack, body, client, logger }) => {
   try {
     await ack();
-    // Maintain thread context for follow-up pages
     const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
 
     const action = body?.actions?.[0];
     let payload = {};
@@ -938,12 +964,12 @@ app.action('trending_show_more', async ({ ack, body, client, logger }) => {
       logger.warn('Could not read SlackSession in trending_show_more:', e.message);
     }
 
-    // Call backend for trending documents with increased limit
     const resp = await apiService.callAPI('trending-documents', { limit }, slackUserId, userEmail, sessionCompanyId);
     const data = resp?.data || {};
-    data._offset = nextOffset; // pass offset to formatter so it shows next page
+    data._offset = nextOffset;
 
-    const blocks = formatResponse(data, 'trending-documents');
+    const blocks = validateSlackBlocks(formatResponse(data, 'trending-documents'));
+
     if (channelId && messageTs) {
       await client.chat.update({ channel: channelId, ts: messageTs, blocks, text: 'Trending Documents' });
     } else {
@@ -951,6 +977,9 @@ app.action('trending_show_more', async ({ ack, body, client, logger }) => {
     }
   } catch (error) {
     logger.error('Error in trending_show_more action:', error);
+    const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
+    const withThread = createThreadHelper(threadTs);
+    
     await client.chat.postEphemeral(withThread({
       channel: body.channel?.id || body.container?.channel_id,
       user: body.user.id,
@@ -959,13 +988,12 @@ app.action('trending_show_more', async ({ ack, body, client, logger }) => {
   }
 });
 
-// Search: Show more (payload carries only { user_query })
+// Search: Show more
 app.action('search_show_more', async ({ ack, body, client, logger }) => {
   try {
     await ack();
-    // Maintain thread context for follow-up pages
     const threadTs = body.message?.thread_ts || body.container?.thread_ts || body.message?.ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
 
     const action = body?.actions?.[0];
     let payload = {};
@@ -974,8 +1002,8 @@ app.action('search_show_more', async ({ ack, body, client, logger }) => {
     const channelId = body.channel?.id || body.container?.channel_id;
     const messageTs = body.container?.message_ts;
     const slackUserId = body.user?.id;
-
     const user_query = payload.user_query || '';
+
     if (!user_query) {
       await client.chat.postEphemeral(withThread({
         channel: channelId,
@@ -995,7 +1023,8 @@ app.action('search_show_more', async ({ ack, body, client, logger }) => {
       return;
     }
 
-    const blocks = formatResponse(resp.data, 'search');
+    const blocks = validateSlackBlocks(formatResponse(resp.data, 'search'));
+
     if (channelId && messageTs) {
       await client.chat.update({ channel: channelId, ts: messageTs, blocks, text: `Search results for "${user_query}"` });
     } else {
@@ -1006,22 +1035,21 @@ app.action('search_show_more', async ({ ack, body, client, logger }) => {
   }
 });
 
-// Slash command: /find → runs enterprise search with provided query
+// Slash command: /find
 app.command('/find', async ({ ack, body, client, logger }) => {
   try {
     await ack();
     const channelId = body.channel_id;
     const userId = body.user_id;
     const rawQuery = (body.text || '').trim();
-    // Maintain thread context if invoked in a thread
     const threadTs = body.thread_ts || body.message_ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
 
     if (!rawQuery) {
       await client.chat.postEphemeral(withThread({
         channel: channelId,
         user: userId,
-        text: 'Usage: /find <your search query>'
+        text: 'Usage: /find <search query>'
       }));
       return;
     }
@@ -1035,7 +1063,7 @@ app.command('/find', async ({ ack, body, client, logger }) => {
       logger.warn('users.info failed for /find:', e.message);
     }
 
-    // Get selected company from SlackSession (per-channel)
+    // Get selected company from SlackSession
     let sessionCompanyId = null;
     try {
       const existingSession = await SlackSessionModel.findOne({ slackUserId: userId, channelId });
@@ -1044,8 +1072,8 @@ app.command('/find', async ({ ack, body, client, logger }) => {
       logger.warn('SlackSession read failed in /find:', e.message);
     }
 
-    // Call search API
     const resp = await apiService.callAPI('search', { user_query: rawQuery }, userId, userEmail, sessionCompanyId);
+
     if (resp.error) {
       await client.chat.postEphemeral(withThread({
         channel: channelId,
@@ -1055,21 +1083,21 @@ app.command('/find', async ({ ack, body, client, logger }) => {
       return;
     }
 
-    const blocks = formatResponse(resp.data, 'search');
+    const blocks = validateSlackBlocks(formatResponse(resp.data, 'search'));
     await client.chat.postMessage(withThread({ channel: channelId, blocks, text: `Search results for "${rawQuery}"` }));
   } catch (error) {
     logger.error('Error in /find command:', error);
   }
 });
 
-// Slash command: /summarize-thread → summarizes the current thread
+// Slash command: /summarize-thread
 app.command('/summarize-thread', async ({ ack, body, client, logger }) => {
   try {
     await ack();
     const channelId = body.channel_id;
     const userId = body.user_id;
-    const threadTs = body.thread_ts || body.message_ts; // require a thread context
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const threadTs = body.thread_ts || body.message_ts;
+    const withThread = createThreadHelper(threadTs);
 
     if (!threadTs) {
       await client.chat.postEphemeral({
@@ -1080,15 +1108,14 @@ app.command('/summarize-thread', async ({ ack, body, client, logger }) => {
       return;
     }
 
-    // Fetch thread messages
     const replies = await client.conversations.replies({ channel: channelId, ts: threadTs, limit: 100 });
     const messages = (replies?.messages || []).filter(m => (m.text && !m.subtype) || (m.bot_id && m.text));
+
     if (!messages.length) {
       await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'No messages found in this thread.' }));
       return;
     }
 
-    // Build a compact transcript
     const transcript = messages.map(m => {
       const ts = new Date(parseFloat(m.ts) * 1000).toISOString();
       const author = m.user || m.username || m.bot_profile?.name || 'unknown';
@@ -1096,13 +1123,13 @@ app.command('/summarize-thread', async ({ ack, body, client, logger }) => {
       return `[${ts}] ${author}: ${text}`;
     }).join('\n');
 
-    // Use OpenAI via nlpService if available
     if (!nlpService.openaiClient) {
       await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: 'Summarization is unavailable (LLM not configured).' }));
       return;
     }
 
     const prompt = `Summarize the following Slack thread into a concise, factual summary with key points and decisions. If action items appear, list them. Keep it under 150-200 words.\n\nTHREAD TRANSCRIPT:\n${transcript}`;
+
     const completion = await nlpService.openaiClient.chat.completions.create({
       model: nlpService.getPowerfulModel(),
       messages: [
@@ -1112,15 +1139,18 @@ app.command('/summarize-thread', async ({ ack, body, client, logger }) => {
       temperature: 0.3,
       max_tokens: 350
     });
+
     const summary = completion.choices?.[0]?.message?.content?.trim() || 'Summary not available.';
+
+    const blocks = validateSlackBlocks([
+      { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
+      { type: 'section', text: { type: 'mrkdwn', text: summary } }
+    ]);
 
     await client.chat.postMessage(withThread({
       channel: channelId,
       text: '📝 Thread Summary',
-      blocks: [
-        { type: 'header', text: { type: 'plain_text', text: '📝 Thread Summary', emoji: true } },
-        { type: 'section', text: { type: 'mrkdwn', text: summary } }
-      ]
+      blocks
     }));
   } catch (error) {
     logger.error('Error in /summarize-thread command:', error);
@@ -1128,8 +1158,13 @@ app.command('/summarize-thread', async ({ ack, body, client, logger }) => {
       const channelId = body.channel_id;
       const userId = body.user_id;
       const threadTs = body.thread_ts || body.message_ts;
-      const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
-      await client.chat.postEphemeral(withThread({ channel: channelId, user: userId, text: `❌ Summarization failed: ${error.message}` }));
+      const withThread = createThreadHelper(threadTs);
+      
+      await client.chat.postEphemeral(withThread({ 
+        channel: channelId, 
+        user: userId, 
+        text: `❌ Summarization failed: ${error.message}` 
+      }));
     } catch (_) { /* ignore */ }
   }
 });
@@ -1138,21 +1173,19 @@ app.command('/summarize-thread', async ({ ack, body, client, logger }) => {
 app.message(async ({ message, client, logger }) => {
   // Only respond to direct messages (not channel messages)
   if (message.channel_type !== 'im') return;
-  
+
   try {
     logger.info('Direct message received:', message.text);
-    // Ensure replies stay in the same thread in DMs
     const threadTs = message.thread_ts || message.ts;
-    const withThread = (payload) => (threadTs ? { ...payload, thread_ts: threadTs } : payload);
+    const withThread = createThreadHelper(threadTs);
 
-    
     const query = message.text.trim();
-    
     if (!query) return;
 
     // Intercept admin tool intents in DMs FIRST
     if (isAdminToolIntent(query)) {
-      await client.chat.postMessage(withThread({ channel: message.channel, blocks: buildEsRedirectBlocks() }));
+      const blocks = validateSlackBlocks(buildEsRedirectBlocks());
+      await client.chat.postMessage(withThread({ channel: message.channel, blocks }));
       return;
     }
 
@@ -1168,54 +1201,28 @@ app.message(async ({ message, client, logger }) => {
       // If NLP fails, proceed with normal flow
     }
 
-    // Show typing indicator
-    // Defer UX notice until after authentication
-
     // Get user info to extract email for API calls
     console.log('🔍 STEP 1: Attempting to extract Slack user email...');
-    console.log('   Target User ID:', message.user);
-    console.log('   Channel ID:', message.channel);
-
+    
     let userInfo = null;
     let extractedEmail = null;
-
+    
     try {
-      console.log('📞 Making Slack API call: users.info...');
       userInfo = await client.users.info({ user: message.user });
-
-      console.log('✅ Slack API Response received');
-      console.log('   User ID:', userInfo?.user?.id);
-      console.log('   User Name:', userInfo?.user?.name);
-      console.log('   Real Name:', userInfo?.user?.real_name);
-      console.log('   Profile Email:', userInfo?.user?.profile?.email);
-      console.log('   Profile Display Name:', userInfo?.user?.profile?.display_name);
-      console.log('   Is Bot:', userInfo?.user?.is_bot);
-      console.log('   Is Admin:', userInfo?.user?.is_admin);
-
       extractedEmail = userInfo?.user?.profile?.email;
-
+      
       if (extractedEmail) {
         console.log('✅ SUCCESS: Email extracted from Slack profile:', extractedEmail);
       } else {
         console.log('⚠️ WARNING: No email found in Slack profile');
-        console.log('   Profile object:', JSON.stringify(userInfo?.user?.profile, null, 2));
       }
-
     } catch (error) {
-      console.log('❌ FAILED: Could not get Slack user info');
-      console.log('   Error Type:', error.constructor.name);
-      console.log('   Error Message:', error.message);
-      console.log('   Error Code:', error.code);
-      console.log('   Error Data:', error.data);
-
+      console.log('❌ FAILED: Could not get Slack user info:', error.message);
     }
 
     // Fallback email logic
-    console.log('🔍 STEP 2: Determining email to use for API calls...');
     let finalEmail = extractedEmail;
-
     if (!finalEmail) {
-      // Try to get from RBAC config
       try {
         const { RBAC_CONFIG } = require('./src/config/apis');
         finalEmail = RBAC_CONFIG.user_email;
@@ -1235,11 +1242,12 @@ app.message(async ({ message, client, logger }) => {
       channelId: message.channel,
     });
 
-    console.log("userId with Mongodb->",userId)
+    console.log("userId with Mongodb->", userId);
+
     if (!userId) {
-      // Access denied message sent by middleware
       return;
     }
+
     // Process the query with user context including email
     const userContext = {
       slackUserId: message.user,
@@ -1249,7 +1257,7 @@ app.message(async ({ message, client, logger }) => {
     };
 
     const result = await queryHandler.processQuery(query, userContext);
-    
+
     if (result.error) {
       await client.chat.postMessage(withThread({
         channel: message.channel,
@@ -1258,44 +1266,48 @@ app.message(async ({ message, client, logger }) => {
       return;
     }
 
-    // Format and send the response
-  // Handle conversational responses FIRST
-if (result.type === 'conversational' || result.message) {
-  await client.chat.postMessage(withThread({
-    channel: message.channel,
-    text: result.message
-  }));
-  return;
-}
+    // Handle conversational responses FIRST
+    if (result.type === 'conversational' || result.message) {
+      await client.chat.postMessage(withThread({
+        channel: message.channel,
+        text: result.message
+      }));
+      return;
+    }
 
-// Handle SlackHandler responses (blocks format)
-if (result.blocks) {
-  await client.chat.postMessage(withThread({
-    channel: message.channel,
-    blocks: result.blocks
-  }));
-  return;
-}
+    // Handle SlackHandler responses (blocks format)
+    if (result.blocks) {
+      const validatedBlocks = validateSlackBlocks(result.blocks);
+      await client.chat.postMessage(withThread({
+        channel: message.channel,
+        blocks: validatedBlocks
+      }));
+      return;
+    }
 
-// Handle regular Enterprise Search API responses
-if (result.data) {
-  const formattedResponse = formatResponse(result.data, result.apiUsed);
-  await client.chat.postMessage(withThread({
-    channel: message.channel,
-    text: `Search results for your query`,
-    blocks: formattedResponse
-  }));
-  return;
-}
+    // Handle regular Enterprise Search API responses
+    if (result.data) {
+      const formattedResponse = formatResponse(result.data, result.apiUsed);
+      const validatedBlocks = validateSlackBlocks(formattedResponse);
+      
+      await client.chat.postMessage(withThread({
+        channel: message.channel,
+        text: `Search results for your query`,
+        blocks: validatedBlocks
+      }));
+      return;
+    }
 
-// Fallback for unexpected response structure
-await client.chat.postMessage(withThread({
-  channel: message.channel,
-  text: "I processed your request, but couldn't format the response properly."
-}));
-
+    // Fallback for unexpected response structure
+    await client.chat.postMessage(withThread({
+      channel: message.channel,
+      text: "I processed your request, but couldn't format the response properly."
+    }));
   } catch (error) {
     logger.error('Error handling direct message:', error);
+    const threadTs = message.thread_ts || message.ts;
+    const withThread = createThreadHelper(threadTs);
+    
     await client.chat.postMessage(withThread({
       channel: message.channel,
       text: `❌ Sorry, I encountered an error: ${error.message}`
@@ -1306,8 +1318,7 @@ await client.chat.postMessage(withThread({
 // Add error handlers
 app.error(async (error) => {
   console.error('❌ Slack App Error:', error);
-
-  // Handle specific Socket Mode errors gracefully (only in Socket Mode)
+  
   if (useSocketMode && error.message && (
     error.message.includes('socket') ||
     error.message.includes('WebSocket') ||
@@ -1315,13 +1326,11 @@ app.error(async (error) => {
     error.message.includes('Unhandled event')
   )) {
     console.log('🔄 Socket Mode connection issue detected');
-    console.log('   This is usually temporary and the connection will be re-established automatically');
-    // Don't crash the app, let it handle reconnection automatically
+    console.log(' This is usually temporary and the connection will be re-established automatically');
     return;
   }
 
-  // For other errors, log them but don't crash
-  console.error('   Error details:', error.stack || error.message);
+  console.error(' Error details:', error.stack || error.message);
 });
 
 // Handle process signals for graceful shutdown
@@ -1351,24 +1360,21 @@ process.on('SIGTERM', async () => {
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-  // Handle specific Socket Mode state machine errors (only in Socket Mode)
   if (useSocketMode && error.message && error.message.includes('Unhandled event') && error.message.includes('server explicit disconnect')) {
     console.warn('⚠️ Socket Mode state machine error (this is usually harmless):');
-    console.warn('   ', error.message);
+    console.warn(' ', error.message);
     console.log('🔄 Connection will be re-established automatically');
-    return; // Don't crash the app
+    return;
   }
 
   console.error('❌ Uncaught Exception:', error);
-  console.error('   Stack:', error.stack);
-
-  // For critical errors, exit gracefully
+  console.error(' Stack:', error.stack);
+  
   if (error.message && (error.message.includes('EADDRINUSE') || error.message.includes('permission'))) {
     console.error('💥 Critical error detected, exiting...');
     process.exit(1);
   }
 
-  // For other errors, log but don't exit in development, exit in production
   if (isProduction) {
     console.error('💥 Production error, exiting for safety...');
     process.exit(1);
@@ -1379,14 +1385,11 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-
-  // Handle Socket Mode related rejections
+  
   if (reason && reason.message && reason.message.includes('socket')) {
     console.log('🔄 Socket-related rejection, this is usually temporary');
     return;
   }
-
-  // Don't exit immediately, let the app try to recover
 });
 
 // Start the app with enhanced error handling
@@ -1394,11 +1397,11 @@ process.on('unhandledRejection', (reason, promise) => {
   try {
     console.log('🚀 Starting Slack API Query Bot...');
     console.log('🔧 Environment check:');
-    console.log('   SLACK_BOT_TOKEN:', process.env.SLACK_BOT_TOKEN ? '✅ Set' : '❌ Missing');
-    console.log('   SLACK_SIGNING_SECRET:', process.env.SLACK_SIGNING_SECRET ? '✅ Set' : '❌ Missing');
-
+    console.log(' SLACK_BOT_TOKEN:', process.env.SLACK_BOT_TOKEN ? '✅ Set' : '❌ Missing');
+    console.log(' SLACK_SIGNING_SECRET:', process.env.SLACK_SIGNING_SECRET ? '✅ Set' : '❌ Missing');
+    
     if (useSocketMode) {
-      console.log('   SLACK_APP_TOKEN:', process.env.SLACK_APP_TOKEN ? '✅ Set' : '❌ Missing');
+      console.log(' SLACK_APP_TOKEN:', process.env.SLACK_APP_TOKEN ? '✅ Set' : '❌ Missing');
     }
 
     // Initialize database connection
@@ -1412,9 +1415,10 @@ process.on('unhandledRejection', (reason, promise) => {
     }
 
     await app.start();
+    
     console.log('⚡️ Slack API Query Bot is running!');
     console.log(`🚀 Server started on port ${process.env.PORT || 3000}`);
-
+    
     if (useSocketMode) {
       console.log('📡 Socket Mode connection established');
     } else {
@@ -1422,31 +1426,29 @@ process.on('unhandledRejection', (reason, promise) => {
       console.log('📋 Webhook URL: https://your-app.onrender.com/slack/events');
       console.log('✅ Server is listening and ready for deployment');
     }
-
   } catch (error) {
     console.error('❌ Failed to start the app:', error);
-
-    // Provide specific guidance for common issues
+    
     if (error.message && error.message.includes('token')) {
       console.error('💡 Token Error - Please check:');
-      console.error('   1. SLACK_BOT_TOKEN is set correctly');
+      console.error(' 1. SLACK_BOT_TOKEN is set correctly');
       if (useSocketMode) {
-        console.error('   2. SLACK_APP_TOKEN is set correctly');
-        console.error('   3. Bot has proper permissions');
+        console.error(' 2. SLACK_APP_TOKEN is set correctly');
+        console.error(' 3. Bot has proper permissions');
       } else {
-        console.error('   2. SLACK_SIGNING_SECRET is set correctly');
-        console.error('   3. Webhook URL is configured in Slack app');
+        console.error(' 2. SLACK_SIGNING_SECRET is set correctly');
+        console.error(' 3. Webhook URL is configured in Slack app');
       }
     } else if (useSocketMode && error.message && error.message.includes('socket')) {
       console.error('💡 Socket Mode Error - Please check:');
-      console.error('   1. Socket Mode is enabled in your Slack app');
-      console.error('   2. App-level token has connections:write scope');
-      console.error('   3. Network connectivity');
+      console.error(' 1. Socket Mode is enabled in your Slack app');
+      console.error(' 2. App-level token has connections:write scope');
+      console.error(' 3. Network connectivity');
     } else if (!useSocketMode && error.message && error.message.includes('port')) {
       console.error('💡 Port Error - Please check:');
-      console.error('   1. PORT environment variable is set');
-      console.error('   2. Port is not already in use');
-      console.error('   3. App has permission to bind to port');
+      console.error(' 1. PORT environment variable is set');
+      console.error(' 2. Port is not already in use');
+      console.error(' 3. App has permission to bind to port');
     }
 
     process.exit(1);

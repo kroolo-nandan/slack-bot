@@ -105,132 +105,130 @@ class ResponseFormatter {
     }
   }
 
-  formatSearchResults(data) {
-    const blocks = [];
+formatSearchResults(data) {
+  const blocks = [];
+  
+  // Extract results from your actual response structure
+  const results = data.results || [];
+  const searchTime = data.search_time ? Math.round(data.search_time * 1000) : undefined;
+  const queryText = data.query || data.user_query;
 
-    // Handle multiple API response shapes
-    const shapeBResults = Array.isArray(data.result) ? data.result : null; // { summary, result: [...] }
-    const results = shapeBResults || data.results || [];
-    const total = typeof data.total === 'number' ? data.total : (results.length || 0);
-    const searchTime = typeof data.response_time === 'number' ? Math.round(data.response_time * 1000) : undefined;
+  // ✅ Count unique documents by issue_key (most accurate for Jira)
+  const uniqueIssues = new Set();
+  const uniqueResults = [];
+  
+  results.forEach(result => {
+    const issueKey = result.metadata?.issue_key || result.metadata?.url || result.document_id;
+    if (!uniqueIssues.has(issueKey)) {
+      uniqueIssues.add(issueKey);
+      uniqueResults.push(result);
+    }
+  });
 
-    // Header with search stats
-    const queryText = data.user_query || data.query;
-    const q = queryText ? ` for "${queryText}"` : '';
+  const total = uniqueResults.length; // ✅ Shows ~8 unique documents instead of 50 chunks
+
+  // ✅ AI Summary Block
+  if (data.ai_response || data.summary) {
     blocks.push({
-      type: "header",
+      type: "section",
       text: {
-        type: "plain_text",
-        text: `🔍 Search Results (${total} found)${q}`
+        type: "mrkdwn",
+        text: `🤖 *AI Summary:*\n${data.ai_response || data.summary}`
       }
     });
-
-    // Add search performance info
-    if (searchTime || data.search_method || data.performance) {
-      const perfBits = [];
-      if (searchTime) perfBits.push(`⚡ ${searchTime}ms`);
-      if (data.search_method) perfBits.push(`🧠 ${data.search_method}`);
-      const rps = data.performance?.results_per_second;
-      if (typeof rps === 'number') perfBits.push(`📈 ${rps} results/s`);
-      if (perfBits.length) {
-        blocks.push({ type: 'context', elements: [ { type: 'mrkdwn', text: perfBits.join(' • ') } ] });
-      }
-    }
-
-    // If new shape includes a top-level summary, render it
-    if (typeof data.summary === 'string' && data.summary.trim()) {
-      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: this.truncate(data.summary, 1500) } });
-    }
-
-    if (results && results.length > 0) {
-      // Show first 5 results to avoid overwhelming
-      const resultsToShow = results;
-
-      resultsToShow.forEach((result, index) => {
-        blocks.push({ type: "divider" });
-
-        // New shape: { title, description, url, source }
-        if (shapeBResults) {
-          const sectionBlock = {
-            type: 'section',
-            text: { type: 'mrkdwn', text: `*${result.title || 'Untitled'}*\n${this.truncate(result.description || 'No description available')}` }
-          };
-          if (result.url && this.isValidHttpUrl(result.url)) {
-            sectionBlock.accessory = { type: 'button', text: { type: 'plain_text', text: 'Open' }, url: result.url };
-          }
-          blocks.push(sectionBlock);
-          const src = result.source ? `📦 ${result.source}` : null;
-          if (src) {
-            blocks.push({ type: 'context', elements: [ { type: 'mrkdwn', text: src } ] });
-          }
-        } else {
-          // Legacy/other shape with content_preview & metadata
-          const contentPreview = this.truncate(result.content_preview ? this.cleanContentPreview(result.content_preview) : 'No preview available');
-          const sectionBlock = {
-            type: "section",
-            text: { type: "mrkdwn", text: `*${result.title || result.file_name || 'Untitled'}*\n${contentPreview}` }
-          };
-          if (result.url && this.isValidHttpUrl(result.url)) {
-            sectionBlock.accessory = { type: "button", text: { type: "plain_text", text: "Open" }, url: result.url };
-          }
-          blocks.push(sectionBlock);
-          const platform = result.platform || result.connector_type || 'unknown';
-          const score = typeof result.score === 'number' ? result.score : 0;
-          const docType = result.document_type || result.file_type || 'Document';
-          const visibility = result.metadata?.visibility ? ` • 👁️ ${result.metadata.visibility}` : '';
-          const relevance = result.search_context?.query_relevance ? ` • 🎯 ${String(result.search_context.query_relevance).toUpperCase()} relevance` : '';
-          const ghStars = typeof result.metadata?.stars_count === 'number' ? ` • ⭐ ${result.metadata.stars_count}` : '';
-          const ghForks = typeof result.metadata?.forks_count === 'number' ? ` • 🍴 ${result.metadata.forks_count}` : '';
-          const lastMod = result.metadata?.last_modified ? ` • 🕒 ${new Date(result.metadata.last_modified).toLocaleString()}` : '';
-          blocks.push({ type: 'context', elements: [ { type: 'mrkdwn', text: `${this.platformEmoji(platform)} • 📁 ${docType}${visibility}${relevance}${ghStars}${ghForks}${lastMod} • 📊 Score: ${score}` } ] });
-        }
-      });
-
-      // Show "and X more" + action if there are more results
-      // const shownCount = resultsToShow.length;
-      // const remaining = Math.max(0, results.length - shownCount);
-      // if (remaining > 0) {
-      //   blocks.push({
-      //     type: "context",
-      //     elements: [ { type: "mrkdwn", text: `_... and ${remaining} more results_` } ]
-      //   });
-      //   // Add Show more button to fetch more from backend (increase limit)
-      //   // Prepare compact payload containing remaining results to avoid another backend call
-      //   // Slack 'value' max ~2000 chars; keep very compact
-      //   const compactRemaining = results.slice(shownCount).map(r => ({
-      //     title: this.truncate(r.title || r.file_name || 'Untitled', 110),
-      //     description: this.truncate(
-      //       shapeBResults ? (r.description || '') : (r.content_preview ? this.cleanContentPreview(r.content_preview) : ''),
-      //       180
-      //     ),
-      //     url: r.url && this.isValidHttpUrl(r.url) ? r.url : undefined,
-      //     source: (r.source || r.platform || r.connector_type || '').slice(0, 40) || undefined
-      //   }));
-      //   blocks.push({
-      //     type: 'actions',
-      //     elements: [
-      //       {
-      //         type: 'button',
-      //         text: { type: 'plain_text', text: `Show remaining (${remaining})` },
-      //         action_id: 'search_show_more',
-      //         value: this.safeActionValue({ user_query: queryText, remainingResults: compactRemaining })
-      //       }
-      //     ]
-      //   });
-      // }
-
-    } else {
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "No results found for your search query."
-        }
-      });
-    }
-
-    return blocks;
+    blocks.push({ type: "divider" });
   }
+
+  // Header with REAL document count
+  const q = queryText ? ` for "${queryText}"` : '';
+  blocks.push({
+    type: "header",
+    text: {
+      type: "plain_text",
+      text: `🔍 Search Results (${total} documents found)${q}` // ✅ Now shows "8 documents" instead of "50 chunks"
+    }
+  });
+
+  // Performance info
+  const perfBits = [];
+  if (searchTime) perfBits.push(`⚡ ${searchTime}ms`);
+  if (data.search_type) perfBits.push(`🧠 ${data.search_type}`);
+  
+  if (perfBits.length) {
+    blocks.push({ 
+      type: 'context', 
+      elements: [{ type: 'mrkdwn', text: perfBits.join(' • ') }] 
+    });
+  }
+
+  if (uniqueResults && uniqueResults.length > 0) {
+    const resultsToShow = uniqueResults.slice(0, 8);
+    
+    resultsToShow.forEach((result, index) => {
+      blocks.push({ type: "divider" });
+      
+      const title = result.metadata?.title || 'Untitled';
+      const contentPreview = result.metadata?.breadcrumb || 
+        `${result.metadata?.project_key}-${result.metadata?.issue_key}` ||
+        'No preview available';
+      
+      const sectionBlock = {
+        type: 'section',
+        text: { 
+          type: 'mrkdwn', 
+          text: `*${title}*\n${contentPreview}` 
+        }
+      };
+      
+      if (result.metadata?.url && this.isValidHttpUrl(result.metadata.url)) {
+        sectionBlock.accessory = { 
+          type: 'button', 
+          text: { type: 'plain_text', text: 'Open' }, 
+          url: result.metadata.url 
+        };
+      }
+      
+      blocks.push(sectionBlock);
+      
+      // Context information
+      const platform = result.metadata?.datasource || 'unknown';
+      const score = typeof result.similarity_score === 'number' ? result.similarity_score.toFixed(3) : '0.000';
+      const docType = result.metadata?.mime_type || 'Document';
+      const chunkInfo = typeof result.metadata?.chunk_index === 'number' ? 
+        ` • 📄 Chunk ${result.metadata.chunk_index}/${result.metadata.total_chunks}` : '';
+      
+      blocks.push({ 
+        type: 'context', 
+        elements: [{ 
+          type: 'mrkdwn', 
+          text: `${this.platformEmoji(platform)} ${platform} • 📁 ${docType}${chunkInfo} • 📊 Score: ${score}` 
+        }] 
+      });
+    });
+
+    const remaining = Math.max(0, uniqueResults.length - resultsToShow.length);
+    if (remaining > 0) {
+      blocks.push({
+        type: "context",
+        elements: [{ type: "mrkdwn", text: `_... and ${remaining} more documents available_` }]
+      });
+    }
+    
+  } else {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "No results found for your search query."
+      }
+    });
+  }
+
+  return blocks;
+}
+
+
+
 
   formatRecentSearches(data) {
     const blocks = [];
